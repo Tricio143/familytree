@@ -133,7 +133,9 @@
     flex:1 1 auto; overflow:auto; position:relative; background:
       radial-gradient(var(--line) 1px, transparent 1px) 0 0/22px 22px;
     background-color: var(--surface-sunken);
+    cursor: grab;
   }
+  #treeScroll.panning{ cursor: grabbing; }
   #treeCanvas{position:relative;}
   #treeSvg{position:absolute; top:0; left:0; pointer-events:none;}
   .person-card{
@@ -2197,6 +2199,27 @@ function setZoom(z){
   canvas.style.transformOrigin = "0 0";
   document.getElementById("zoomReset").textContent = Math.round(zoom*100) + "%";
 }
+// Same as setZoom, but keeps the canvas point under (clientX, clientY) fixed on screen --
+// used by wheel-zoom and pinch-zoom so the view zooms toward the cursor / the pinch
+// midpoint instead of toward the top-left corner.
+function setZoomAtPoint(newZoom, clientX, clientY){
+  var scroller = document.getElementById("treeScroll");
+  var canvas = document.getElementById("treeCanvas");
+  if(!scroller || !canvas) return;
+  newZoom = Math.max(0.4, Math.min(1.6, newZoom));
+  if(newZoom === zoom) return;
+  var rect = scroller.getBoundingClientRect();
+  var px = clientX - rect.left;
+  var py = clientY - rect.top;
+  var canvasX = (scroller.scrollLeft + px) / zoom;
+  var canvasY = (scroller.scrollTop + py) / zoom;
+  zoom = newZoom;
+  canvas.style.transform = "scale(" + zoom + ")";
+  canvas.style.transformOrigin = "0 0";
+  document.getElementById("zoomReset").textContent = Math.round(zoom*100) + "%";
+  scroller.scrollLeft = canvasX * zoom - px;
+  scroller.scrollTop = canvasY * zoom - py;
+}
 // Horizontally centers the tree and scrolls to the very top, so the earliest generation
 // (the root ancestors) is always the thing you land on -- called on first load, after adding
 // a new oldest-generation ancestor, and from the "center tree" button for whenever the view
@@ -2284,6 +2307,85 @@ document.getElementById("zoomIn").addEventListener("click", function(){ setZoom(
 document.getElementById("zoomOut").addEventListener("click", function(){ setZoom(zoom - 0.1); });
 document.getElementById("zoomReset").addEventListener("click", function(){ setZoom(1); });
 document.getElementById("centerTree").addEventListener("click", function(){ centerTreeView(true); });
+
+/* ================= Canvas pan & zoom ================= */
+// Click-hold-drag (or tap-hold-drag on touch) to pan around the tree, mouse-wheel
+// to zoom in/out toward the cursor, and two-finger pinch to zoom on touch devices --
+// all driven by Pointer Events so mouse, touch and pen share one code path.
+(function(){
+  var scroller = document.getElementById("treeScroll");
+  if(!scroller) return;
+  scroller.style.touchAction = "none"; // we drive panning & pinch-zoom ourselves instead of the browser
+  var pointers = {};   // pointerId -> {x,y}
+  var panBase = null;  // one-finger / mouse drag baseline
+  var pinchBase = null; // two-finger pinch baseline
+
+  function ignoreTarget(target){
+    return !!(target.closest && target.closest(".person-card, .unit-plus, .unit-collapse, .zoomctl, button, input, textarea, select, a, label"));
+  }
+  function pointerList(){ return Object.keys(pointers).map(function(k){ return pointers[k]; }); }
+  function dist(a, b){ return Math.hypot(a.x - b.x, a.y - b.y); }
+
+  function startPan(x, y){
+    panBase = { x: x, y: y, scrollLeft: scroller.scrollLeft, scrollTop: scroller.scrollTop };
+    pinchBase = null;
+  }
+  function startPinch(){
+    var pts = pointerList();
+    if(pts.length < 2) return;
+    pinchBase = { dist: dist(pts[0], pts[1]), zoom: zoom };
+    panBase = null;
+  }
+
+  scroller.addEventListener("pointerdown", function(e){
+    if(currentView !== "tree") return;
+    if(ignoreTarget(e.target)) return;
+    if(e.button !== undefined && e.button > 0) return; // primary mouse button, touch or pen only
+    pointers[e.pointerId] = { x: e.clientX, y: e.clientY };
+    try{ scroller.setPointerCapture(e.pointerId); }catch(err){}
+    scroller.classList.add("panning");
+    var count = Object.keys(pointers).length;
+    if(count === 1) startPan(e.clientX, e.clientY);
+    else if(count === 2) startPinch();
+  });
+
+  scroller.addEventListener("pointermove", function(e){
+    if(!pointers[e.pointerId]) return;
+    pointers[e.pointerId] = { x: e.clientX, y: e.clientY };
+    var pts = pointerList();
+    if(pts.length >= 2 && pinchBase){
+      var newDist = dist(pts[0], pts[1]);
+      var midX = (pts[0].x + pts[1].x) / 2;
+      var midY = (pts[0].y + pts[1].y) / 2;
+      if(newDist > 0) setZoomAtPoint(pinchBase.zoom * (newDist / pinchBase.dist), midX, midY);
+    } else if(pts.length === 1 && panBase){
+      scroller.scrollLeft = panBase.scrollLeft + (panBase.x - e.clientX);
+      scroller.scrollTop = panBase.scrollTop + (panBase.y - e.clientY);
+    }
+  });
+
+  function endPointer(e){
+    delete pointers[e.pointerId];
+    try{ scroller.releasePointerCapture(e.pointerId); }catch(err){}
+    var pts = pointerList();
+    if(pts.length === 0){
+      panBase = null; pinchBase = null;
+      scroller.classList.remove("panning");
+    } else if(pts.length === 1){
+      startPan(pts[0].x, pts[0].y); // dropped from a pinch to one finger -- keep panning, no jump
+    } else {
+      startPinch();
+    }
+  }
+  scroller.addEventListener("pointerup", endPointer);
+  scroller.addEventListener("pointercancel", endPointer);
+
+  scroller.addEventListener("wheel", function(e){
+    if(currentView !== "tree") return;
+    e.preventDefault();
+    setZoomAtPoint(zoom * Math.exp(-e.deltaY * 0.0015), e.clientX, e.clientY);
+  }, { passive: false });
+})();
 
 loadState();
 // Show the example tree as a placeholder while the shared database connects -- it lives only
