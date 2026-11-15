@@ -334,6 +334,7 @@
     <button id="zoomIn" title="Zoom in">+</button>
     <button id="zoomReset" title="Reset zoom" style="font-size:11px;">100%</button>
     <button id="zoomOut" title="Zoom out">–</button>
+    <button id="centerTree" title="Center tree / jump to top" style="font-size:15px;">⌖</button>
   </div>
 </div>
 
@@ -1188,11 +1189,37 @@ function renderTree(liveOnly){
   svg.setAttribute("viewBox", "0 0 " + width + " " + height);
 
   var svgNS = "http://www.w3.org/2000/svg";
+  // A small "rings" mark straddling the midpoint of a partner connector -- the one visual
+  // cue that reads the same regardless of branch color or how zoomed-out the tree is, so a
+  // marriage line is never mistaken for a parent-child line at a glance.
+  function partnerMark(cx, cy, color){
+    var bg = document.createElementNS(svgNS,"rect");
+    bg.setAttribute("x", cx-11); bg.setAttribute("y", cy-7.5); bg.setAttribute("width",22); bg.setAttribute("height",15); bg.setAttribute("rx",7.5);
+    bg.setAttribute("fill","var(--surface)");
+    svg.appendChild(bg);
+    var r = 4.2, off = 3.3;
+    [-off, off].forEach(function(dx){
+      var c = document.createElementNS(svgNS,"circle");
+      c.setAttribute("cx", cx+dx); c.setAttribute("cy", cy); c.setAttribute("r", r);
+      c.setAttribute("fill","none"); c.setAttribute("stroke", color || "var(--accent)"); c.setAttribute("stroke-width","1.8");
+      svg.appendChild(c);
+    });
+  }
+  // A small downward arrowhead at a parent-child connector's child end -- both of this curve's
+  // control points share the endpoint's x, so its tangent there is always a straight vertical
+  // drop, which is what makes a plain triangle (no path-angle math needed) line up exactly.
+  function downArrow(x, y, color){
+    var p = document.createElementNS(svgNS,"polygon");
+    p.setAttribute("points", (x-5)+","+(y-8)+" "+(x+5)+","+(y-8)+" "+x+","+y);
+    p.setAttribute("fill", color || "var(--line-strong)");
+    svg.appendChild(p);
+  }
   function line(x1,y1,x2,y2,color){
     var l = document.createElementNS(svgNS,"line");
     l.setAttribute("x1",x1); l.setAttribute("y1",y1); l.setAttribute("x2",x2); l.setAttribute("y2",y2);
     l.setAttribute("stroke", color || "var(--line-strong)"); l.setAttribute("stroke-width", color ? "3" : "2.5");
     svg.appendChild(l);
+    partnerMark((x1+x2)/2, (y1+y2)/2, color);
   }
   function crossLine(x1,y1,x2,y2,color){
     var midY = (y1 + y2) / 2;
@@ -1204,6 +1231,7 @@ function renderTree(liveOnly){
     p.setAttribute("stroke-dasharray","4 5");
     p.setAttribute("opacity","0.85");
     svg.appendChild(p);
+    downArrow(x2, y2, color || "var(--accent)");
   }
   // an organic parent-to-child curve, drawn directly between the two cards' own anchor points --
   // since it never relies on a shared bus line or a fixed column, it stays attached to both
@@ -1216,6 +1244,7 @@ function renderTree(liveOnly){
     p.setAttribute("stroke", color || "var(--line-strong)");
     p.setAttribute("stroke-width", color ? "3" : "2.5");
     svg.appendChild(p);
+    downArrow(x2, y2, color);
   }
 
   // ---- pass 2: draw connectors and cards from the effective positions ----
@@ -1718,7 +1747,13 @@ function openEdit(id, draft){
 
     people[person.id] = person;
 
+    var addedNewRootAncestor = false;
     if(isNew && pendingRelAction){
+      if(pendingRelAction.kind === "parent"){
+        var anchorForRoot = people[pendingRelAction.anchorId];
+        var hadParents = anchorForRoot && (anchorForRoot.parentIds||[]).some(function(pid){ return people[pid]; });
+        addedNewRootAncestor = !hadParents; // this new parent becomes the tree's new topmost generation here
+      }
       applyPendingRelationship(person.id);
     }
     pendingRelAction = null;
@@ -1726,6 +1761,7 @@ function openEdit(id, draft){
     saveState();
     close();
     renderAll();
+    if(addedNewRootAncestor) centerTreeView(true); // keep the new oldest generation in view instead of leaving it scrolled off
     toast("Saved " + fullName(person));
   });
 
@@ -2075,6 +2111,18 @@ function setZoom(z){
   canvas.style.transformOrigin = "0 0";
   document.getElementById("zoomReset").textContent = Math.round(zoom*100) + "%";
 }
+// Horizontally centers the tree and scrolls to the very top, so the earliest generation
+// (the root ancestors) is always the thing you land on -- called on first load, after adding
+// a new oldest-generation ancestor, and from the "center tree" button for whenever the view
+// has drifted off while adding people lower down or to the side.
+function centerTreeView(smooth){
+  var scroller = document.getElementById("treeScroll");
+  var canvas = document.getElementById("treeCanvas");
+  if(!scroller || !canvas) return;
+  var canvasW = canvas.offsetWidth * zoom;
+  var left = Math.max(0, (canvasW - scroller.clientWidth) / 2);
+  scroller.scrollTo({ left: left, top: 0, behavior: smooth ? "smooth" : "auto" });
+}
 
 /* ================= Wire up ================= */
 function renderAll(){
@@ -2149,6 +2197,7 @@ document.getElementById("searchInput").addEventListener("input", function(){
 document.getElementById("zoomIn").addEventListener("click", function(){ setZoom(zoom + 0.1); });
 document.getElementById("zoomOut").addEventListener("click", function(){ setZoom(zoom - 0.1); });
 document.getElementById("zoomReset").addEventListener("click", function(){ setZoom(1); });
+document.getElementById("centerTree").addEventListener("click", function(){ centerTreeView(true); });
 
 loadState();
 try{ adminUnlocked = sessionStorage.getItem("ftAdmin") === "1"; }catch(e){ adminUnlocked = false; }
@@ -2156,6 +2205,7 @@ updateAdminButton();
 updateSyncStatus("💻 Saved locally only (this browser)");
 setView("tree");
 renderAll();
+centerTreeView(false);
 initCapabilities();
 
 })();
