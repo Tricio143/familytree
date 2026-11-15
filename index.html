@@ -127,6 +127,7 @@
   .trace-arrow{color:var(--ink-faint); font-size:14px;}
   .trace-result{font-size:12.5px; color:var(--ink-muted); line-height:1.6;}
   .person-card.trace-endpoint{border-color:var(--trace); box-shadow:0 0 0 2px var(--trace), var(--shadow);}
+  .person-card.search-match{border-color:var(--accent); box-shadow:0 0 0 3px var(--accent), var(--shadow); background:var(--accent-soft);}
 
   /* ---------- Tree canvas ---------- */
   #treeScroll{
@@ -1329,6 +1330,28 @@ function renderTree(liveOnly){
       if(el) el.classList.add("trace-endpoint");
     });
   }
+  if(!liveOnly) updateSearchHighlight(); // skip during a live card-drag frame, to avoid fighting it with a scroll
+}
+
+// Highlights any tree card matching the current search box, so a search also works while
+// looking at the tree, not just the list. Scrolls the first match into view when there's one.
+function updateSearchHighlight(){
+  var canvas = document.getElementById("treeCanvas");
+  var input = document.getElementById("searchInput");
+  if(!canvas || !input) return;
+  var q = (input.value||"").trim().toLowerCase();
+  var cards = canvas.querySelectorAll(".person-card");
+  var firstMatch = null;
+  Array.prototype.forEach.call(cards, function(card){
+    var p = people[card.dataset.id];
+    var isMatch = !!(q && p && (
+      fullName(p).toLowerCase().indexOf(q) !== -1 ||
+      (p.maidenName||"").toLowerCase().indexOf(q) !== -1
+    ));
+    card.classList.toggle("search-match", isMatch);
+    if(isMatch && !firstMatch) firstMatch = card;
+  });
+  if(firstMatch) firstMatch.scrollIntoView({ behavior: "smooth", block: "center", inline: "center" });
 }
 
 function placeCard(canvas, person, x, y){
@@ -2302,6 +2325,7 @@ document.getElementById("traceClearBtn").addEventListener("click", function(){
 });
 document.getElementById("searchInput").addEventListener("input", function(){
   if(currentView === "list") renderList();
+  else updateSearchHighlight();
 });
 document.getElementById("zoomIn").addEventListener("click", function(){ setZoom(zoom + 0.1); });
 document.getElementById("zoomOut").addEventListener("click", function(){ setZoom(zoom - 0.1); });
