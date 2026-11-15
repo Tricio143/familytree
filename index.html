@@ -711,8 +711,8 @@ function exportExcel(){
       "First Name": p.firstName || "",
       "Last Name": p.lastName || "",
       "Maiden Name": p.maidenName || "",
-      "Birth Year": p.birthYear || "",
-      "Death Year": p.deathYear || "",
+      "Birth Date": formatPartialDate(p.birthYear, p.birthMonth, p.birthDay) || "",
+      "Death Date": formatPartialDate(p.deathYear, p.deathMonth, p.deathDay) || "",
       "Age": ageInfo(p) || "",
       "Details": p.details || "",
       "Phone": p.phone || "",
@@ -807,19 +807,56 @@ function findNameMatches(firstName, lastName, excludeIds){
   out.sort(function(a,b){ return a.dist - b.dist; });
   return out.slice(0, 4);
 }
+var MONTH_ABBR = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+// Builds the <select> markup for an optional birth/death month field in the edit modal.
+function monthOptionsHtml(id, selected){
+  selected = (selected||"").toString();
+  var opts = '<option value=""' + (selected ? "" : " selected") + '>—</option>';
+  for(var m=1; m<=12; m++){
+    opts += '<option value="'+m+'"' + (selected === String(m) ? " selected" : "") + '>' + MONTH_ABBR[m-1] + '</option>';
+  }
+  return '<select id="'+id+'">' + opts + '</select>';
+}
+// Formats a year that may optionally also have a month and/or day -- any day without a
+// month, or any date without a year, is dropped rather than shown half-wrong.
+function formatPartialDate(year, month, day){
+  year = (year||"").toString().trim();
+  if(!year) return "";
+  var m = parseInt(month, 10), d = parseInt(day, 10);
+  var hasMonth = !isNaN(m) && m >= 1 && m <= 12;
+  var hasDay = hasMonth && !isNaN(d) && d >= 1 && d <= 31;
+  if(hasMonth && hasDay) return MONTH_ABBR[m-1] + " " + d + ", " + year;
+  if(hasMonth) return MONTH_ABBR[m-1] + " " + year;
+  return year;
+}
 function lifespan(person){
-  var b = person.birthYear, d = person.deathYear;
+  var b = formatPartialDate(person.birthYear, person.birthMonth, person.birthDay);
+  var d = formatPartialDate(person.deathYear, person.deathMonth, person.deathDay);
   if(!b && !d) return "";
-  if(b && d) return b + "–" + d;
+  if(b && d) return b + " – " + d;
   if(b && !d) return "b. " + b;
   return "d. " + d;
 }
 function ageInfo(person){
-  var b = parseInt(person.birthYear, 10), d = parseInt(person.deathYear, 10);
-  if(isNaN(b)) return "";
-  if(!isNaN(d)) return (d - b) + " at death";
-  var curYear = new Date().getFullYear();
-  return (curYear - b) + " yrs";
+  var by = parseInt(person.birthYear, 10);
+  if(isNaN(by)) return "";
+  var bm = parseInt(person.birthMonth, 10), bd = parseInt(person.birthDay, 10);
+  var hasFullBirth = !isNaN(bm) && bm>=1 && bm<=12 && !isNaN(bd) && bd>=1 && bd<=31;
+  var dy = parseInt(person.deathYear, 10);
+  if(!isNaN(dy)){
+    var dm = parseInt(person.deathMonth, 10), dd = parseInt(person.deathDay, 10);
+    var hasFullDeath = !isNaN(dm) && dm>=1 && dm<=12 && !isNaN(dd) && dd>=1 && dd<=31;
+    var age = dy - by;
+    if(hasFullBirth && hasFullDeath && (dm < bm || (dm === bm && dd < bd))) age--;
+    return age + " at death";
+  }
+  var today = new Date();
+  var age2 = today.getFullYear() - by;
+  if(hasFullBirth){
+    var curM = today.getMonth()+1, curD = today.getDate();
+    if(curM < bm || (curM === bm && curD < bd)) age2--;
+  }
+  return age2 + " yrs";
 }
 function displayDates(person){
   var ls = lifespan(person);
@@ -1552,8 +1589,8 @@ function renderList(){
     return '<tr data-id="'+p.id+'">' +
       '<td><div class="row-avatar" '+av+'>'+avContent+'</div></td>' +
       '<td>' + escapeHtml(fullName(p)) + (p.maidenName ? ' <span class="muted">née '+escapeHtml(p.maidenName)+'</span>' : '') + '</td>' +
-      '<td>' + escapeHtml(p.birthYear||"—") + '</td>' +
-      '<td>' + escapeHtml(p.deathYear||"—") + '</td>' +
+      '<td>' + escapeHtml(formatPartialDate(p.birthYear, p.birthMonth, p.birthDay)||"—") + '</td>' +
+      '<td>' + escapeHtml(formatPartialDate(p.deathYear, p.deathMonth, p.deathDay)||"—") + '</td>' +
       '<td>' + (ageStr ? escapeHtml(ageStr) : '<span class="muted">—</span>') + '</td>' +
       '<td>' + parentsStr + '</td>' +
       '<td>' + partnerStr + '</td>' +
@@ -1573,7 +1610,8 @@ function renderList(){
 function startRelationship(kind, anchorId){
   pendingRelAction = { kind: kind, anchorId: anchorId };
   var fresh = {
-    id: uid(), firstName:"", lastName:"", maidenName:"", birthYear:"", deathYear:"",
+    id: uid(), firstName:"", lastName:"", maidenName:"", birthYear:"", birthMonth:"", birthDay:"",
+    deathYear:"", deathMonth:"", deathDay:"",
     details:"", phone:"", email:"", location:"", notes:"", photo:"", partnerId:"", parentIds:[]
   };
   var anchor = people[anchorId];
@@ -1640,9 +1678,16 @@ function openEdit(id, draft){
       (isNew ? '<div id="nameMatchBox" hidden style="margin:-2px 0 10px;padding:9px 10px;border:1px solid var(--line-strong);border-radius:8px;background:var(--accent-soft);font-size:12.5px;line-height:1.5;"></div>' : '') +
       '<div class="field"><label>Maiden name (optional)</label><input id="fMaiden" value="'+escapeHtml(person.maidenName)+'"></div>' +
       '<div class="field-row">' +
-        '<div class="field"><label>Birth year</label><input id="fBirth" value="'+escapeHtml(person.birthYear)+'" inputmode="numeric" placeholder="e.g. 1978"></div>' +
-        '<div class="field"><label>Death year (if applicable)</label><input id="fDeath" value="'+escapeHtml(person.deathYear)+'" inputmode="numeric" placeholder="leave blank if living"></div>' +
+        '<div class="field" style="flex:1.5;"><label>Birth year</label><input id="fBirth" value="'+escapeHtml(person.birthYear)+'" inputmode="numeric" placeholder="e.g. 1978"></div>' +
+        '<div class="field"><label>Month</label>'+monthOptionsHtml("fBirthMonth", person.birthMonth)+'</div>' +
+        '<div class="field" style="flex:0.7;"><label>Day</label><input id="fBirthDay" value="'+escapeHtml(person.birthDay)+'" type="number" min="1" max="31" inputmode="numeric" placeholder="—"></div>' +
       '</div>' +
+      '<div class="field-row">' +
+        '<div class="field" style="flex:1.5;"><label>Death year (if applicable)</label><input id="fDeath" value="'+escapeHtml(person.deathYear)+'" inputmode="numeric" placeholder="leave blank if living"></div>' +
+        '<div class="field"><label>Month</label>'+monthOptionsHtml("fDeathMonth", person.deathMonth)+'</div>' +
+        '<div class="field" style="flex:0.7;"><label>Day</label><input id="fDeathDay" value="'+escapeHtml(person.deathDay)+'" type="number" min="1" max="31" inputmode="numeric" placeholder="—"></div>' +
+      '</div>' +
+      '<div class="muted" style="font-size:11px;margin:-6px 0 10px;">Month and day are optional — a year alone is still fine.</div>' +
       '<div class="field"><label>Occupation / location</label><input id="fDetails" value="'+escapeHtml(person.details)+'" placeholder="e.g. Teacher · Austin, TX"></div>' +
       '<div class="field-row">' +
         '<div class="field"><label>Phone number</label><input id="fPhone" value="'+escapeHtml(person.phone)+'" placeholder="e.g. (555) 123-4567"></div>' +
@@ -1798,7 +1843,17 @@ function openEdit(id, draft){
     person.lastName = lastName;
     person.maidenName = overlay.querySelector("#fMaiden").value.trim();
     person.birthYear = overlay.querySelector("#fBirth").value.trim();
+    person.birthMonth = overlay.querySelector("#fBirthMonth").value;
+    person.birthDay = overlay.querySelector("#fBirthDay").value.trim();
     person.deathYear = overlay.querySelector("#fDeath").value.trim();
+    person.deathMonth = overlay.querySelector("#fDeathMonth").value;
+    person.deathDay = overlay.querySelector("#fDeathDay").value.trim();
+    // Month/day only mean anything alongside a year, and a day only alongside a month --
+    // drop anything that doesn't have what it needs rather than storing a half-date.
+    if(!person.birthYear) { person.birthMonth = ""; person.birthDay = ""; }
+    if(!person.birthMonth) person.birthDay = "";
+    if(!person.deathYear) { person.deathMonth = ""; person.deathDay = ""; }
+    if(!person.deathMonth) person.deathDay = "";
     person.details = overlay.querySelector("#fDetails").value.trim();
     person.phone = overlay.querySelector("#fPhone").value.trim();
     person.email = overlay.querySelector("#fEmail").value.trim();
@@ -2269,7 +2324,7 @@ function renderAll(){
 
 document.getElementById("tabTree").addEventListener("click", function(){ setView("tree"); });
 document.getElementById("tabList").addEventListener("click", function(){ setView("list"); });
-document.getElementById("addPersonBtn").addEventListener("click", function(){ pendingRelAction=null; openEdit(null, {id:uid(),firstName:"",lastName:"",maidenName:"",birthYear:"",deathYear:"",details:"",phone:"",email:"",location:"",notes:"",photo:"",partnerId:"",parentIds:[]}); });
+document.getElementById("addPersonBtn").addEventListener("click", function(){ pendingRelAction=null; openEdit(null, {id:uid(),firstName:"",lastName:"",maidenName:"",birthYear:"",birthMonth:"",birthDay:"",deathYear:"",deathMonth:"",deathDay:"",details:"",phone:"",email:"",location:"",notes:"",photo:"",partnerId:"",parentIds:[]}); });
 document.getElementById("emptyAddBtn").addEventListener("click", function(){ document.getElementById("addPersonBtn").click(); });
 document.getElementById("startOwnBtn").addEventListener("click", function(){
   pendingDbDeletes = pendingDbDeletes.concat(Object.keys(people));
