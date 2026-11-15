@@ -1,0 +1,2090 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="claude:viewport-fit-sides" content="cover">
+<title>Family Tree Builder</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&display=swap">
+<style>
+  /* Layout concept: generation rows run top to bottom; couples sit side by
+     side within a row; an SVG layer behind the cards draws marriage lines
+     and parent-to-children connectors computed from a leaf-based tree layout. */
+  :root{
+    --bg:#faf8f4;
+    --surface:#ffffff;
+    --surface-sunken:#f1ede6;
+    --ink:#2a2521;
+    --ink-muted:#766f66;
+    --ink-faint:#a39a8d;
+    --accent:#44695a;
+    --accent-ink:#1f3a2f;
+    --accent-soft:#e3ebe4;
+    --line:#d9d1c4;
+    --line-strong:#b9ae9c;
+    --danger:#a8462f;
+    --danger-soft:#f3e2dc;
+    --trace:#b45309;
+    --shadow: 0 1px 2px rgba(40,32,20,.06), 0 6px 18px rgba(40,32,20,.07);
+    --radius: 10px;
+    --font-display: 'Fraunces', Georgia, 'Times New Roman', serif;
+    --font-body: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#1a1815; --surface:#232019; --surface-sunken:#1f1c17;
+      --ink:#ede7dc; --ink-muted:#aea496; --ink-faint:#7c7367;
+      --accent:#86b49a; --accent-ink:#dceade; --accent-soft:#2a3630;
+      --line:#3c362c; --line-strong:#554d3e;
+      --danger:#d98063; --danger-soft:#3a251e;
+      --trace:#fb923c;
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 24px rgba(0,0,0,.35);
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#1a1815; --surface:#232019; --surface-sunken:#1f1c17;
+    --ink:#ede7dc; --ink-muted:#aea496; --ink-faint:#7c7367;
+    --accent:#86b49a; --accent-ink:#dceade; --accent-soft:#2a3630;
+    --line:#3c362c; --line-strong:#554d3e;
+    --danger:#d98063; --danger-soft:#3a251e;
+    --trace:#fb923c;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 10px 24px rgba(0,0,0,.35);
+    color-scheme: dark;
+  }
+
+  *{box-sizing:border-box;}
+  html,body{height:100%;}
+  body{
+    margin:0; background:var(--bg); color:var(--ink);
+    font-family:var(--font-body); font-size:14px; line-height:1.45;
+    padding-left:max(16px, env(safe-area-inset-left,0px));
+    padding-right:max(16px, env(safe-area-inset-right,0px));
+    display:flex; flex-direction:column; height:100%;
+  }
+  h1,h2,h3{font-family:var(--font-display); font-weight:600; margin:0; text-wrap:balance;}
+  button{font-family:var(--font-body); cursor:pointer;}
+  input,select,textarea{font-family:var(--font-body); font-size:14px; color:var(--ink);}
+  ::selection{background:var(--accent-soft);}
+
+  /* ---------- Top bar ---------- */
+  .topbar{
+    display:flex; align-items:center; gap:14px; flex-wrap:wrap;
+    padding:14px 0 12px; border-bottom:1px solid var(--line);
+    flex:0 0 auto;
+  }
+  .brand{display:flex; align-items:baseline; gap:8px; margin-right:auto;}
+  .brand h1{font-size:19px; letter-spacing:.2px;}
+  .brand .count{font-size:12px; color:var(--ink-muted);}
+  .seg{
+    display:flex; border:1px solid var(--line-strong); border-radius:8px; overflow:hidden;
+  }
+  .seg button{
+    background:var(--surface); border:none; color:var(--ink-muted); font-size:12.5px;
+    padding:7px 12px; font-weight:600; letter-spacing:.2px;
+  }
+  .seg button + button{border-left:1px solid var(--line-strong);}
+  .seg button[aria-pressed="true"]{background:var(--accent); color:#fff;}
+  .btn{
+    background:var(--surface); border:1px solid var(--line-strong); color:var(--ink);
+    border-radius:8px; padding:7px 13px; font-size:12.5px; font-weight:600;
+    display:inline-flex; align-items:center; gap:6px; white-space:nowrap;
+  }
+  .btn:hover{border-color:var(--accent);}
+  .btn.primary{background:var(--accent); border-color:var(--accent); color:#fff;}
+  .btn.primary:hover{filter:brightness(1.06);}
+  .btn.ghost{border-color:transparent; background:transparent;}
+  .btn.danger{color:var(--danger); border-color:var(--danger);}
+  .btn.danger:hover{background:var(--danger-soft);}
+  .btn.admin-unlocked{border-color:var(--accent); color:var(--accent-ink); background:var(--accent-soft);}
+  .btn:focus-visible, .seg button:focus-visible, .card:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible{
+    outline:2px solid var(--accent); outline-offset:2px;
+  }
+  .icon{width:14px; height:14px; flex:none;}
+
+  .search-wrap{position:relative; display:flex; align-items:center;}
+  .search-wrap .icon{position:absolute; left:9px; color:var(--ink-faint); pointer-events:none;}
+  #searchInput{
+    padding:7px 10px 7px 28px; border:1px solid var(--line-strong); border-radius:8px;
+    background:var(--surface); width:180px;
+  }
+
+  .banner{
+    flex:0 0 auto; background:var(--accent-soft); color:var(--accent-ink);
+    font-size:12.5px; padding:8px 0; display:flex; align-items:center; gap:10px; justify-content:center;
+    border-bottom:1px solid var(--line);
+  }
+  .banner button{background:none;border:none;color:var(--accent-ink); font-weight:700; text-decoration:underline; font-size:12.5px; padding:0;}
+
+  .trace-panel{
+    flex:0 0 auto; background:var(--surface-sunken); border-bottom:1px solid var(--line);
+    padding:10px 0; display:flex; flex-direction:column; gap:8px;
+  }
+  .trace-row{display:flex; align-items:center; gap:8px; flex-wrap:wrap;}
+  .trace-row input{
+    border:1px solid var(--line-strong); border-radius:8px; padding:7px 10px; background:var(--surface); color:var(--ink);
+    font-size:12.5px; width:190px; min-width:0;
+  }
+  .trace-arrow{color:var(--ink-faint); font-size:14px;}
+  .trace-result{font-size:12.5px; color:var(--ink-muted); line-height:1.6;}
+  .person-card.trace-endpoint{border-color:var(--trace); box-shadow:0 0 0 2px var(--trace), var(--shadow);}
+
+  /* ---------- Tree canvas ---------- */
+  #treeScroll{
+    flex:1 1 auto; overflow:auto; position:relative; background:
+      radial-gradient(var(--line) 1px, transparent 1px) 0 0/22px 22px;
+    background-color: var(--surface-sunken);
+  }
+  #treeCanvas{position:relative;}
+  #treeSvg{position:absolute; top:0; left:0; pointer-events:none;}
+  .person-card{
+    position:absolute; width:168px; background:var(--surface); border:1px solid var(--line);
+    border-radius:var(--radius); box-shadow:var(--shadow); padding:10px 10px 9px;
+    display:flex; gap:9px; align-items:flex-start;
+    transition:border-color .12s, transform .12s;
+  }
+  .person-card:hover{border-color:var(--accent); transform:translateY(-1px);}
+  .person-card{cursor:grab;}
+  .person-card:active{cursor:grabbing;}
+  .person-card .textwrap{min-width:0; flex:1;}
+  .avatar{
+    width:40px; height:40px; border-radius:50%; flex:none; position:relative;
+    background-size:cover; background-position:center; background-color:var(--accent-soft);
+    display:flex; align-items:center; justify-content:center;
+    font-family:var(--font-display); font-weight:600; font-size:14px; color:var(--accent-ink);
+    border:1px solid var(--line); overflow:hidden; cursor:pointer;
+  }
+  .avatar input{position:absolute; inset:0; opacity:0; cursor:pointer; width:100%; height:100%;}
+  .avatar .cambadge{
+    position:absolute; bottom:-2px; right:-2px; width:15px; height:15px; border-radius:50%;
+    background:var(--accent); color:#fff; display:flex; align-items:center; justify-content:center;
+    border:1.5px solid var(--surface); pointer-events:none;
+  }
+  .avatar .cambadge svg{width:8px;height:8px;}
+  .p-name{font-family:var(--font-display); font-weight:600; font-size:13.5px; line-height:1.25;
+    overflow:hidden; text-overflow:ellipsis; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical;}
+  .p-maiden{color:var(--ink-muted); font-weight:400; font-size:12px;}
+  .p-dates{font-size:11.5px; color:var(--ink-muted); margin-top:2px; font-variant-numeric:tabular-nums;}
+  .p-details{font-size:11px; color:var(--ink-faint); margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;}
+  .p-btn{all:unset; cursor:pointer; display:block; width:100%;}
+
+  .unit-plus{
+    position:absolute; width:22px; height:22px; border-radius:50%; background:var(--surface);
+    border:1px dashed var(--line-strong); color:var(--ink-faint); display:flex; align-items:center;
+    justify-content:center; font-size:14px; line-height:1; pointer-events:auto;
+  }
+  .unit-plus:hover{border-color:var(--accent); color:var(--accent); border-style:solid;}
+
+  .empty-state{
+    position:absolute; inset:0; display:flex; align-items:center; justify-content:center; flex-direction:column; gap:14px; text-align:center; padding:20px;
+  }
+  .empty-state h2{font-size:20px;}
+  .empty-state p{color:var(--ink-muted); max-width:340px; margin:0;}
+
+  /* ---------- List view ---------- */
+  #listView{flex:1 1 auto; overflow:auto; display:none; padding:4px 0 24px;}
+  table.ppl{width:100%; border-collapse:collapse; font-size:13px;}
+  table.ppl th{
+    text-align:left; font-size:11px; letter-spacing:.4px; text-transform:uppercase; color:var(--ink-faint);
+    padding:8px 10px; border-bottom:1px solid var(--line); position:sticky; top:0; background:var(--bg);
+  }
+  table.ppl td{padding:8px 10px; border-bottom:1px solid var(--line); vertical-align:middle;}
+  table.ppl tr{cursor:pointer;}
+  table.ppl tr:hover td{background:var(--accent-soft);}
+  .row-avatar{width:30px; height:30px; border-radius:50%; background-size:cover; background-position:center;
+    background-color:var(--accent-soft); display:flex; align-items:center; justify-content:center;
+    font-family:var(--font-display); font-weight:600; font-size:11px; color:var(--accent-ink); overflow:hidden; border:1px solid var(--line);}
+  .muted{color:var(--ink-muted);}
+
+  /* ---------- Modal ---------- */
+  .overlay{
+    position:fixed; inset:0; background:rgba(20,16,10,.42); display:flex; align-items:flex-end;
+    justify-content:center; z-index:50; padding:0;
+  }
+  @media (min-width:640px){ .overlay{align-items:center; padding:20px;} }
+  .modal{
+    background:var(--surface); width:100%; max-width:440px; max-height:92vh; overflow:auto;
+    border-radius:16px 16px 0 0; box-shadow:0 -4px 30px rgba(0,0,0,.2);
+    padding-bottom:max(18px, env(safe-area-inset-bottom,0px));
+  }
+  @media (min-width:640px){ .modal{border-radius:14px; box-shadow:var(--shadow);} }
+  .modal-head{
+    display:flex; align-items:center; gap:10px; padding:16px 18px 10px; position:sticky; top:0;
+    background:var(--surface); z-index:2; border-bottom:1px solid var(--line);
+  }
+  .modal-head h2{font-size:17px; flex:1;}
+  .modal-close{all:unset; cursor:pointer; color:var(--ink-muted); padding:4px;}
+  .modal-body{padding:16px 18px 6px; display:flex; flex-direction:column; gap:14px;}
+  .field{display:flex; flex-direction:column; gap:5px;}
+  .field label{font-size:11.5px; font-weight:600; color:var(--ink-muted); letter-spacing:.2px;}
+  .field input, .field select, .field textarea{
+    border:1px solid var(--line-strong); border-radius:8px; padding:8px 10px; background:var(--surface); color:var(--ink);
+    width:100%;
+  }
+  .field textarea{resize:vertical; min-height:56px;}
+  .field-row{display:flex; gap:10px;}
+  .field-row .field{flex:1; min-width:0;}
+  .modal-avatar-row{display:flex; align-items:center; gap:14px;}
+  .modal-avatar{width:68px; height:68px; border-radius:50%; background-size:cover; background-position:center;
+    background-color:var(--accent-soft); display:flex; align-items:center; justify-content:center;
+    font-family:var(--font-display); font-weight:600; font-size:22px; color:var(--accent-ink); flex:none; border:1px solid var(--line); overflow:hidden;}
+  .relbtns{display:flex; flex-wrap:wrap; gap:8px;}
+  .relbtns .btn{font-size:12px; padding:6px 10px;}
+  .modal-foot{
+    display:flex; gap:10px; padding:14px 18px 4px; border-top:1px solid var(--line); margin-top:6px; flex-wrap:wrap;
+  }
+  .confirm-del{display:flex; align-items:center; gap:8px; font-size:12.5px; color:var(--danger); flex-wrap:wrap;}
+
+  .toast{
+    position:fixed; left:50%; bottom:max(18px, env(safe-area-inset-bottom,0px)); transform:translateX(-50%);
+    background:var(--ink); color:var(--bg); font-size:12.5px; padding:9px 16px; border-radius:20px;
+    z-index:80; box-shadow:var(--shadow); opacity:0; pointer-events:none; transition:opacity .2s, transform .2s;
+  }
+  .toast.show{opacity:1; transform:translateX(-50%) translateY(-4px);}
+
+  .zoomctl{
+    position:fixed; right:max(16px, env(safe-area-inset-right,0px)); bottom:18px; display:flex; flex-direction:column;
+    gap:1px; background:var(--surface); border:1px solid var(--line-strong); border-radius:10px; box-shadow:var(--shadow); overflow:hidden; z-index:30;
+  }
+  .zoomctl button{all:unset; cursor:pointer; width:34px; height:34px; display:flex; align-items:center; justify-content:center;
+    color:var(--ink-muted); font-size:16px;}
+  .zoomctl button:hover{background:var(--accent-soft); color:var(--accent-ink);}
+  .zoomctl button + button{border-top:1px solid var(--line);}
+
+  #importOverlay .field textarea{min-height:140px; font-family:ui-monospace,monospace; font-size:11.5px;}
+  [hidden]{display:none!important;}
+</style>
+</head>
+<body>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+
+
+
+
+<div class="topbar">
+  <div class="brand">
+    <h1>Family Tree Builder</h1>
+    <span class="count" id="peopleCount"></span>
+    <span class="count" id="syncStatus" style="margin-left:6px;"></span>
+  </div>
+  <div class="search-wrap" id="searchWrap">
+    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>
+    <input id="searchInput" placeholder="Search people…" autocomplete="off">
+  </div>
+  <div class="seg" role="tablist" aria-label="View">
+    <button id="tabTree" aria-pressed="true">Tree</button>
+    <button id="tabList" aria-pressed="false">List</button>
+  </div>
+  <button class="btn" id="traceBtn" title="Trace how two people connect">
+    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12h4l2.5 7L13 5l2.5 7H21"/></svg>
+    Trace
+  </button>
+  <button class="btn primary" id="addPersonBtn">
+    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 5v14M5 12h14"/></svg>
+    Add person
+  </button>
+  <button class="btn ghost" id="adminBtn" title="Admin mode (needed to delete people)">
+    <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="4" y="11" width="16" height="9" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>
+    <span id="adminLabel">Admin</span>
+  </button>
+  <button class="btn ghost" id="moreBtn" title="More">
+    <svg class="icon" viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>
+  </button>
+</div>
+
+<datalist id="personNameOptions"></datalist>
+
+<div class="trace-panel" id="tracePanel" hidden>
+  <div class="trace-row">
+    <input type="text" id="traceA" list="personNameOptions" placeholder="First person…" autocomplete="off">
+    <span class="trace-arrow">↔</span>
+    <input type="text" id="traceB" list="personNameOptions" placeholder="Second person…" autocomplete="off">
+    <button class="btn primary" id="traceFindBtn">Find connection</button>
+    <button class="btn ghost" id="traceClearBtn">Clear</button>
+  </div>
+  <div class="trace-result" id="traceResult" hidden></div>
+</div>
+
+<div class="banner" id="exampleBanner" hidden>
+  Showing an example family so you can see how branches connect.
+  <button id="startOwnBtn">Clear it and start your own tree →</button>
+</div>
+
+<div id="treeScroll">
+  <div id="treeCanvas">
+    <svg id="treeSvg"></svg>
+  </div>
+  <div class="empty-state" id="emptyState" hidden>
+    <h2>Your tree is empty</h2>
+    <p>Add the first person, then branch out — add their parents, a partner, or children straight from each card.</p>
+    <button class="btn primary" id="emptyAddBtn">
+      <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 5v14M5 12h14"/></svg>
+      Add the first person
+    </button>
+  </div>
+  <div class="zoomctl">
+    <button id="zoomIn" title="Zoom in">+</button>
+    <button id="zoomReset" title="Reset zoom" style="font-size:11px;">100%</button>
+    <button id="zoomOut" title="Zoom out">–</button>
+  </div>
+</div>
+
+<div id="listView">
+  <table class="ppl" id="pplTable">
+    <thead><tr><th></th><th>Name</th><th>Born</th><th>Died</th><th>Age</th><th>Parents</th><th>Partner</th><th>Children</th></tr></thead>
+    <tbody id="pplTbody"></tbody>
+  </table>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+(function(){
+"use strict";
+
+/* ================= Constants ================= */
+var CARD_W = 168, CARD_H = 70, SPOUSE_GAP = 10, COL_W = 206, ROW_H = 168, PAD = 80;
+// a bright, maximally-distinct spectrum for separate branches (used first); once exhausted,
+// a second, more muted set extends it further so very large trees still get unique colors.
+var BRANCH_COLORS = [
+  "#e4572e", "#17a398", "#f7b801", "#7209b7", "#2ec4b6", "#ff3864", "#3a86ff",
+  "#8ac926", "#f72585", "#ffbe0b", "#4361ee", "#06d6a0", "#ef476f", "#9b5de5"
+];
+var BRANCH_COLORS_FALLBACK = [
+  "#6b705c", "#a4161a", "#386641", "#774936", "#4a4e69", "#577590", "#9c6644", "#48484a"
+];
+// NOTE on security: this page has no server behind it, so this is a soft deterrent only --
+// anyone who opens "view source" can read these values. It stops accidental deletions by
+// ordinary users, but it is not a real access-control boundary.
+var ADMIN_USER = "Tricio";
+var ADMIN_PASS = "Hulaanmo";
+var LS_KEY = "familyTreeData.v1";
+var LS_EXAMPLE_KEY = "familyTreeIsExample.v1";
+
+/* ================= Seed / example data ================= */
+function seedData(){
+  var p = {};
+  function add(id,f){ p[id]=Object.assign({id:id,firstName:"",lastName:"",maidenName:"",birthYear:"",deathYear:"",details:"",notes:"",photo:"",partnerId:"",parentIds:[]},f); }
+  add("p1",{firstName:"Eleanor",lastName:"Winters",birthYear:"1925",deathYear:"2010",details:"Homemaker · Portland, ME",partnerId:"p2"});
+  add("p2",{firstName:"Thomas",lastName:"Winters",birthYear:"1922",deathYear:"1998",details:"Shipwright · Portland, ME",partnerId:"p1"});
+  add("p3",{firstName:"Margaret",lastName:"Caldwell",maidenName:"Winters",birthYear:"1948",details:"Retired librarian",parentIds:["p1","p2"],partnerId:"p4"});
+  add("p4",{firstName:"James",lastName:"Caldwell",birthYear:"1945",deathYear:"2015",details:"Civil engineer",partnerId:"p3"});
+  add("p5",{firstName:"Robert",lastName:"Winters",birthYear:"1951",details:"Retired, Portland, ME",parentIds:["p1","p2"],partnerId:"p6"});
+  add("p6",{firstName:"Linda",lastName:"Winters",maidenName:"Park",birthYear:"1953",details:"Former nurse",partnerId:"p5"});
+  add("p7",{firstName:"Helen",lastName:"Ruiz",maidenName:"Winters",birthYear:"1954",deathYear:"2020",details:"Elementary teacher",parentIds:["p1","p2"],partnerId:"p8"});
+  add("p8",{firstName:"George",lastName:"Ruiz",birthYear:"1950",details:"Retired accountant",partnerId:"p7"});
+  add("p9",{firstName:"Sarah",lastName:"Foster",maidenName:"Caldwell",birthYear:"1974",details:"Architect · Boston, MA",parentIds:["p3","p4"],partnerId:"p10"});
+  add("p10",{firstName:"Ben",lastName:"Foster",birthYear:"1972",details:"High school teacher",partnerId:"p9"});
+  add("p11",{firstName:"Michael",lastName:"Caldwell",birthYear:"1977",details:"Software developer · Austin, TX",parentIds:["p3","p4"]});
+  add("p12",{firstName:"David",lastName:"Winters",birthYear:"1979",details:"Chef · Seattle, WA",parentIds:["p5","p6"],partnerId:"p13"});
+  add("p13",{firstName:"Priya",lastName:"Winters",maidenName:"Shah",birthYear:"1980",details:"Pediatrician",partnerId:"p12",parentIds:["p24","p25"]});
+  add("p24",{firstName:"Raj",lastName:"Shah",birthYear:"1950",details:"Retired professor",partnerId:"p25"});
+  add("p25",{firstName:"Meera",lastName:"Shah",birthYear:"1952",details:"Retired physician",partnerId:"p24"});
+  add("p14",{firstName:"Jennifer",lastName:"Winters",birthYear:"1982",details:"Graphic designer",parentIds:["p5","p6"]});
+  add("p15",{firstName:"Christopher",lastName:"Winters",birthYear:"1985",details:"Marine biologist",parentIds:["p5","p6"]});
+  add("p16",{firstName:"Carlos",lastName:"Ruiz",birthYear:"1983",details:"Firefighter",parentIds:["p7","p8"],partnerId:"p17"});
+  add("p17",{firstName:"Ana",lastName:"Ruiz",maidenName:"Reyes",birthYear:"1984",details:"Small business owner",partnerId:"p16"});
+  add("p18",{firstName:"Olivia",lastName:"Foster",birthYear:"2001",details:"Studying medicine",parentIds:["p9","p10"]});
+  add("p19",{firstName:"Ethan",lastName:"Foster",birthYear:"2004",details:"High school student",parentIds:["p9","p10"]});
+  add("p20",{firstName:"Zoe",lastName:"Caldwell",birthYear:"2005",details:"High school student",parentIds:["p11"]});
+  add("p21",{firstName:"Aiden",lastName:"Winters",birthYear:"2010",details:"Grade school",parentIds:["p12","p13"]});
+  add("p22",{firstName:"Mateo",lastName:"Ruiz",birthYear:"2012",details:"Grade school",parentIds:["p16","p17"]});
+  add("p23",{firstName:"Sofia",lastName:"Ruiz",birthYear:"2014",details:"Grade school",parentIds:["p16","p17"]});
+  return p;
+}
+
+/* ================= State ================= */
+// Fill these in before publishing to GitHub Pages (or wherever this file is hosted) so the
+// tree syncs for EVERY visitor automatically, with nothing for them to configure. Get both
+// values from your Supabase project's Settings -> API page; see the README for the exact
+// SQL to run once, in the Supabase SQL editor, to create the two required tables.
+// Leave both blank to let each visitor connect their own Supabase project instead, from the
+// "Connect to Supabase..." item in the "..." menu (saved to their own browser only).
+// This only applies outside the Claude artifact -- inside claude.ai, the tree already syncs
+// through the artifact's own built-in shared database and this block is ignored.
+var SUPABASE_URL = "https://ddhpsxnyaqyupyvasgpd.supabase.co";
+var SUPABASE_ANON_KEY = "sb_publishable_9UgprON-NfXbgg6_zs5rZw_E1bGEq2G";
+
+var people = {};
+var isExample = false;
+var dbApi = null;           // claude.ai artifact's built-in shared database (inside claude.ai only)
+var supaClient = null;      // Supabase client (outside claude.ai, or if explicitly configured)
+var downloadsApi = null;
+var pendingDbDeletes = [];
+var currentView = "tree"; // tree | list
+var zoom = 1;
+var editingId = null;
+var pendingRelAction = null; // 'parent' | 'partner' | 'child' | 'sibling'
+var suppressNextClick = false; // set after a drag so the drop doesn't also open the edit modal
+var highlightPath = null; // ordered array of person ids from the "Trace" search, or null
+var liveDragOverride = null; // { personId, dx, dy } -- the in-progress drag, applied on top of the saved offset
+var dragRafPending = false;
+var adminUnlocked = false;
+
+function uid(){ return "p" + Math.random().toString(36).slice(2,9); }
+
+function loadState(){
+  try{
+    var raw = localStorage.getItem(LS_KEY);
+    if(raw){
+      people = JSON.parse(raw);
+      isExample = localStorage.getItem(LS_EXAMPLE_KEY) === "1";
+      return;
+    }
+  }catch(e){}
+  people = seedData();
+  isExample = true;
+}
+function saveState(){
+  try{
+    localStorage.setItem(LS_KEY, JSON.stringify(people));
+    localStorage.setItem(LS_EXAMPLE_KEY, isExample ? "1" : "0");
+  }catch(e){ /* storage unavailable or full: continue without persistence */ }
+  syncToDb();
+}
+
+/* ================= Shared backup (claude.ai db capability, or Supabase) ================= */
+// Both backends share the same dedupe/delete-queue bookkeeping and the same two lessons
+// learned the hard way: (1) never rewrite a person's record if it hasn't actually changed
+// (lastSyncedJson), and (2) never let an incoming update WHOLESALE-REPLACE local "people" --
+// always patch in just what changed, and never wipe to {} first, even on the very first
+// delivery after connecting (which can land after the person has already added someone
+// locally while the connection was still being made).
+var lastSyncedJson = {};
+var lastSyncedIsExample = null;
+function updateSyncStatus(text){
+  var el = document.getElementById("syncStatus");
+  if(el) el.textContent = text;
+}
+function syncToDb(){
+  if(!dbApi && !supaClient) return;
+  var toDelete = pendingDbDeletes.slice();
+  pendingDbDeletes = [];
+  var changedIds = [];
+  Object.keys(people).forEach(function(id){
+    var json = JSON.stringify(people[id]);
+    if(lastSyncedJson[id] !== json){ changedIds.push(id); lastSyncedJson[id] = json; }
+  });
+  var exampleChanged = (lastSyncedIsExample !== isExample);
+  if(exampleChanged) lastSyncedIsExample = isExample;
+
+  if(dbApi){
+    toDelete.forEach(function(id){ dbApi.collection("people").doc(id).delete().catch(function(){}); });
+    changedIds.forEach(function(id){
+      dbApi.collection("people").doc(id).set(people[id]).catch(function(){ delete lastSyncedJson[id]; });
+    });
+    if(exampleChanged){
+      dbApi.doc("meta/info").set({ isExample: isExample }).catch(function(){ lastSyncedIsExample = null; });
+    }
+  }
+  if(supaClient){
+    toDelete.forEach(function(id){
+      supaClient.from("family_tree_people").delete().eq("id", id).then(function(){}, function(){});
+    });
+    changedIds.forEach(function(id){
+      supaClient.from("family_tree_people").upsert({ id: id, data: people[id] }).then(function(res){
+        if(res && res.error) delete lastSyncedJson[id];
+      }, function(){ delete lastSyncedJson[id]; });
+    });
+    if(exampleChanged){
+      supaClient.from("family_tree_meta").upsert({ id: "info", data: { isExample: isExample } }).then(function(res){
+        if(res && res.error) lastSyncedIsExample = null;
+      }, function(){ lastSyncedIsExample = null; });
+    }
+  }
+}
+function applyIncomingPeopleChange(id, data, removed){
+  if(removed){
+    delete people[id];
+    delete lastSyncedJson[id];
+  } else {
+    people[id] = data;
+    lastSyncedJson[id] = JSON.stringify(data);
+  }
+}
+function subscribeDb(){
+  updateSyncStatus("☁ Connecting…");
+  var loadTimer = setTimeout(function(){
+    toast("Still connecting to the shared backup — showing your local copy for now.");
+  }, 10000);
+  dbApi.doc("meta/info").onSnapshot(function(snap){
+    if(snap.exists){
+      isExample = !!snap.data().isExample;
+      document.getElementById("exampleBanner").hidden = !isExample || Object.keys(people).length===0;
+    }
+  }, function(){});
+  var firstSnapshotDone = false;
+  dbApi.collection("people").onSnapshot(function(snap){
+    clearTimeout(loadTimer);
+    updateSyncStatus("☁ Synced online (shared via Claude)");
+    snap.docChanges().forEach(function(ch){
+      applyIncomingPeopleChange(ch.doc.id, ch.type === "removed" ? null : ch.doc.data(), ch.type === "removed");
+    });
+    try{ localStorage.setItem(LS_KEY, JSON.stringify(people)); }catch(e){}
+    renderAll();
+    if(!firstSnapshotDone){
+      firstSnapshotDone = true;
+      syncToDb(); // push anything that was added locally before the shared backup was ready
+    }
+  }, function(){
+    clearTimeout(loadTimer);
+    updateSyncStatus("💻 Saved locally only (this browser)");
+    toast("Couldn't reach the shared backup — working from your local copy.");
+  });
+}
+function getSupabaseConfig(){
+  var url = "", key = "";
+  try{
+    url = localStorage.getItem("familyTreeSupabaseUrl") || SUPABASE_URL || "";
+    key = localStorage.getItem("familyTreeSupabaseKey") || SUPABASE_ANON_KEY || "";
+  }catch(e){ url = SUPABASE_URL || ""; key = SUPABASE_ANON_KEY || ""; }
+  return { url: url.trim(), key: key.trim() };
+}
+function loadSupabaseScript(){
+  return new Promise(function(resolve, reject){
+    if(window.supabase && window.supabase.createClient){ resolve(); return; }
+    var existing = document.getElementById("supabaseLib");
+    if(existing){
+      existing.addEventListener("load", function(){ resolve(); });
+      existing.addEventListener("error", function(){ reject(new Error("load failed")); });
+      return;
+    }
+    var s = document.createElement("script");
+    s.id = "supabaseLib";
+    s.src = "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.97.0";
+    s.onload = function(){ resolve(); };
+    s.onerror = function(){ reject(new Error("load failed")); };
+    document.head.appendChild(s);
+  });
+}
+function initSupabase(){
+  var cfg = getSupabaseConfig();
+  if(!cfg.url || !cfg.key){ updateSyncStatus("💻 Saved locally only (this browser)"); return; }
+  updateSyncStatus("☁ Connecting…");
+  loadSupabaseScript().then(function(){
+    doInitSupabase(cfg);
+  }).catch(function(){
+    updateSyncStatus("💻 Saved locally only (this browser)");
+    toast("Couldn't load the Supabase library — check your connection and reload.");
+  });
+}
+function doInitSupabase(cfg){
+  try{
+    supaClient = window.supabase.createClient(cfg.url, cfg.key);
+  }catch(e){
+    supaClient = null;
+    updateSyncStatus("💻 Saved locally only (this browser)");
+    toast("That Supabase URL/key didn't work.");
+    return;
+  }
+  var loadTimer = setTimeout(function(){
+    toast("Still connecting to Supabase — showing your local copy for now.");
+  }, 10000);
+  supaClient.from("family_tree_people").select("*").then(function(res){
+    clearTimeout(loadTimer);
+    if(res.error){
+      updateSyncStatus("💻 Saved locally only (this browser)");
+      toast("Couldn't reach Supabase: " + res.error.message);
+      return;
+    }
+    // Merge onto whatever is already here (never wipe first -- see note above);
+    // anything local-only gets pushed up to Supabase right after via syncToDb().
+    (res.data || []).forEach(function(row){ applyIncomingPeopleChange(row.id, row.data, false); });
+    supaClient.from("family_tree_meta").select("*").eq("id", "info").then(function(mres){
+      if(!mres.error && mres.data && mres.data[0]){
+        isExample = !!(mres.data[0].data || {}).isExample;
+      }
+      updateSyncStatus("☁ Synced online (shared via Supabase)");
+      renderAll();
+      syncToDb();
+    });
+    supaClient
+      .channel("family-tree-sync")
+      .on("postgres_changes", { event: "*", schema: "public", table: "family_tree_people" }, function(payload){
+        var removed = payload.eventType === "DELETE";
+        var row = removed ? payload.old : payload.new;
+        applyIncomingPeopleChange(row.id, removed ? null : row.data, removed);
+        try{ localStorage.setItem(LS_KEY, JSON.stringify(people)); }catch(e){}
+        renderAll();
+      })
+      .on("postgres_changes", { event: "*", schema: "public", table: "family_tree_meta" }, function(payload){
+        if(payload.eventType !== "DELETE" && payload.new && payload.new.id === "info"){
+          isExample = !!(payload.new.data || {}).isExample;
+          document.getElementById("exampleBanner").hidden = !isExample || Object.keys(people).length===0;
+        }
+      })
+      .subscribe();
+  }, function(){
+    clearTimeout(loadTimer);
+    updateSyncStatus("💻 Saved locally only (this browser)");
+    toast("Couldn't reach Supabase — working from your local copy.");
+  });
+}
+function initCapabilities(){
+  if(window.claude && window.claude.use){
+    // Running inside the Claude artifact -- prefer its own built-in shared database.
+    window.claude.use("db").then(function(db){
+      if(db){ dbApi = db; subscribeDb(); } else { initSupabase(); }
+    });
+    window.claude.use("downloads").then(function(d){ downloadsApi = d; });
+  } else {
+    // Standalone (e.g. hosted on GitHub Pages) -- claude.ai's database isn't reachable here,
+    // so fall back to Supabase if it's configured (hardcoded above, or saved by a visitor
+    // from the "Connect to Supabase..." menu item).
+    initSupabase();
+  }
+}
+function exportExcel(){
+  if(typeof XLSX === "undefined"){
+    toast("Still loading the export tool — try again in a moment.");
+    return;
+  }
+  var rows = Object.keys(people).map(function(id){
+    var p = people[id];
+    return {
+      "First Name": p.firstName || "",
+      "Last Name": p.lastName || "",
+      "Maiden Name": p.maidenName || "",
+      "Birth Year": p.birthYear || "",
+      "Death Year": p.deathYear || "",
+      "Age": ageInfo(p) || "",
+      "Details": p.details || "",
+      "Notes": p.notes || "",
+      "Partner": (p.partnerId && people[p.partnerId]) ? fullName(people[p.partnerId]) : "",
+      "Parents": (p.parentIds||[]).filter(function(pid){ return people[pid]; }).map(function(pid){ return fullName(people[pid]); }).join(" & "),
+      "Has Photo": p.photo ? "Yes" : "No"
+    };
+  });
+  var ws = XLSX.utils.json_to_sheet(rows);
+  var wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, "Family Tree");
+  var out = XLSX.write(wb, { type: "array", bookType: "xlsx" });
+  var blob = new Blob([out], { type: "application/octet-stream" });
+  if(!downloadsApi){
+    if(!window.claude){
+      // Running standalone (outside the Claude artifact sandbox, e.g. hosted on GitHub Pages)
+      // -- a plain browser download works fine here.
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement("a");
+      a.href = url;
+      a.download = "family-tree.xlsx";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
+      toast("Excel file downloaded.");
+      return;
+    }
+    toast("Excel export isn't available in this view — try opening this page directly on claude.ai.");
+    return;
+  }
+  downloadsApi.save({ filename: "family-tree.xlsx", data: blob }).then(function(){
+    toast("Excel file saved.");
+  }).catch(function(err){
+    if(err && err.code === "declined") return;
+    toast("Couldn't save the Excel file.");
+  });
+}
+
+function openSupabaseSetup(){
+  var cfg = getSupabaseConfig();
+  var overlay = document.createElement("div");
+  overlay.className = "overlay";
+  overlay.innerHTML =
+    '<div class="modal">' +
+      '<div class="modal-head"><h2>Connect to Supabase</h2>' +
+        '<button class="modal-close" id="supaClose" aria-label="Close">' +
+          '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>' +
+        '</button>' +
+      '</div>' +
+      '<div class="modal-body">' +
+        '<p class="muted" style="font-size:12.5px;line-height:1.5;margin:0 0 12px;">' +
+          'Paste the Project URL and anon public API key from your Supabase project\'s ' +
+          '<strong>Settings → API</strong> page. Create the two required tables first — see the ' +
+          'README for the exact SQL to run once in the Supabase SQL editor. Saved to this browser only; ' +
+          'to connect everyone automatically, put these in the <code>SUPABASE_URL</code> / ' +
+          '<code>SUPABASE_ANON_KEY</code> constants near the top of index.html instead.' +
+        '</p>' +
+        '<div class="field"><label>Project URL</label><input id="supaUrl" placeholder="https://xxxxx.supabase.co" value="'+escapeHtml(cfg.url)+'"></div>' +
+        '<div class="field"><label>Anon public API key</label><input id="supaKey" placeholder="eyJ..." value="'+escapeHtml(cfg.key)+'"></div>' +
+      '</div>' +
+      '<div class="modal-foot">' +
+        '<button class="btn primary" id="supaSave">Save & connect</button>' +
+        (cfg.url || cfg.key ? '<button class="btn ghost" id="supaDisconnect">Disconnect</button>' : '') +
+        '<button class="btn ghost" id="supaCancel">Cancel</button>' +
+      '</div>' +
+    '</div>';
+  document.body.appendChild(overlay);
+  function close(){ overlay.remove(); }
+  overlay.querySelector("#supaClose").addEventListener("click", close);
+  overlay.querySelector("#supaCancel").addEventListener("click", close);
+  overlay.addEventListener("click", function(e){ if(e.target === overlay) close(); });
+  overlay.querySelector("#supaSave").addEventListener("click", function(){
+    var url = overlay.querySelector("#supaUrl").value.trim();
+    var key = overlay.querySelector("#supaKey").value.trim();
+    if(!url || !key){ toast("Enter both the project URL and the anon key."); return; }
+    try{
+      localStorage.setItem("familyTreeSupabaseUrl", url);
+      localStorage.setItem("familyTreeSupabaseKey", key);
+    }catch(e){}
+    toast("Saved — reloading to connect…");
+    setTimeout(function(){ location.reload(); }, 500);
+  });
+  var disBtn = overlay.querySelector("#supaDisconnect");
+  if(disBtn){
+    disBtn.addEventListener("click", function(){
+      try{
+        localStorage.removeItem("familyTreeSupabaseUrl");
+        localStorage.removeItem("familyTreeSupabaseKey");
+      }catch(e){}
+      toast("Disconnected — reloading…");
+      setTimeout(function(){ location.reload(); }, 500);
+    });
+  }
+}
+
+/* ================= Helpers ================= */
+function fullName(person){
+  return [person.firstName, person.lastName].filter(Boolean).join(" ") || "Unnamed";
+}
+function normName(first, last){
+  return ((first||"") + " " + (last||"")).toLowerCase().replace(/\s+/g, " ").trim();
+}
+function levenshtein(a, b){
+  a = a || ""; b = b || "";
+  var m = a.length, n = b.length;
+  if(m === 0) return n;
+  if(n === 0) return m;
+  var prev = new Array(n+1), cur = new Array(n+1);
+  for(var j=0;j<=n;j++) prev[j] = j;
+  for(var i=1;i<=m;i++){
+    cur[0] = i;
+    for(var k=1;k<=n;k++){
+      var cost = a[i-1] === b[k-1] ? 0 : 1;
+      cur[k] = Math.min(prev[k]+1, cur[k-1]+1, prev[k-1]+cost);
+    }
+    var tmp = prev; prev = cur; cur = tmp;
+  }
+  return prev[n];
+}
+function sameIdSet(a, b){
+  if(a.length !== b.length) return false;
+  var sa = a.slice().sort(), sb = b.slice().sort();
+  for(var i=0;i<sa.length;i++){ if(sa[i] !== sb[i]) return false; }
+  return true;
+}
+// Finds people already in the tree whose name closely matches the one being typed,
+// so a parent/sibling/etc. typed a second time (for a different child) can be linked
+// to the SAME existing person instead of silently creating a look-alike duplicate.
+function findNameMatches(firstName, lastName, excludeIds){
+  var q = normName(firstName, lastName);
+  if(q.length < 3) return [];
+  excludeIds = excludeIds || [];
+  var out = [];
+  Object.keys(people).forEach(function(id){
+    if(excludeIds.indexOf(id) !== -1) return;
+    var p = people[id];
+    var name = normName(p.firstName, p.lastName);
+    if(!name) return;
+    var dist = levenshtein(q, name);
+    var threshold = name.length <= 6 ? 1 : 2; // tighter tolerance for short names
+    if(dist <= threshold){
+      out.push({ id: id, person: p, dist: dist });
+    }
+  });
+  out.sort(function(a,b){ return a.dist - b.dist; });
+  return out.slice(0, 4);
+}
+function lifespan(person){
+  var b = person.birthYear, d = person.deathYear;
+  if(!b && !d) return "";
+  if(b && d) return b + "–" + d;
+  if(b && !d) return "b. " + b;
+  return "d. " + d;
+}
+function ageInfo(person){
+  var b = parseInt(person.birthYear, 10), d = parseInt(person.deathYear, 10);
+  if(isNaN(b)) return "";
+  if(!isNaN(d)) return (d - b) + " at death";
+  var curYear = new Date().getFullYear();
+  return (curYear - b) + " yrs";
+}
+function displayDates(person){
+  var ls = lifespan(person);
+  if(!ls) return "";
+  var age = ageInfo(person);
+  return age ? (ls + "  ·  " + age) : ls;
+}
+function initials(person){
+  var a = (person.firstName||"").trim()[0] || "";
+  var b = (person.lastName||"").trim()[0] || "";
+  return (a+b).toUpperCase() || "?";
+}
+var AVATAR_HUES = [150,205,25,280,340,60,190];
+function avatarColor(id){
+  var h = 0; for(var i=0;i<id.length;i++) h = (h*31 + id.charCodeAt(i)) >>> 0;
+  var hue = AVATAR_HUES[h % AVATAR_HUES.length];
+  return "hsl(" + hue + "deg 38% 88%)";
+}
+function avatarInk(id){
+  var h = 0; for(var i=0;i<id.length;i++) h = (h*31 + id.charCodeAt(i)) >>> 0;
+  var hue = AVATAR_HUES[h % AVATAR_HUES.length];
+  return "hsl(" + hue + "deg 38% 28%)";
+}
+function getOffset(person){
+  var base = (person && person.posOffset) || { dx:0, dy:0 };
+  if(person && liveDragOverride && liveDragOverride.personId === person.id){
+    return { dx: base.dx + liveDragOverride.dx, dy: base.dy + liveDragOverride.dy };
+  }
+  return base;
+}
+
+/* ================= Relationship tracing ================= */
+function refreshNameOptions(){
+  var dl = document.getElementById("personNameOptions");
+  dl.innerHTML = Object.keys(people).map(function(id){
+    var p = people[id];
+    var label = fullName(p) + (lifespan(p) ? " (" + lifespan(p) + ")" : "");
+    return '<option value="' + escapeHtml(label) + '">';
+  }).join("");
+}
+function resolvePersonByText(text){
+  text = (text||"").trim().toLowerCase();
+  if(!text) return null;
+  var ids = Object.keys(people), i;
+  for(i=0;i<ids.length;i++){
+    var p = people[ids[i]];
+    var label = (fullName(p) + (lifespan(p) ? " (" + lifespan(p) + ")" : "")).toLowerCase();
+    if(label === text) return p.id;
+  }
+  for(i=0;i<ids.length;i++){
+    if(fullName(people[ids[i]]).toLowerCase() === text) return ids[i];
+  }
+  return null;
+}
+function buildAdjacency(){
+  var adj = {};
+  function link(a,b){ if(!a || !b) return; (adj[a]=adj[a]||[]).push(b); (adj[b]=adj[b]||[]).push(a); }
+  Object.keys(people).forEach(function(id){
+    var p = people[id];
+    if(p.partnerId && people[p.partnerId]) link(id, p.partnerId);
+    (p.parentIds||[]).forEach(function(pid){ if(people[pid]) link(id, pid); });
+  });
+  return adj;
+}
+function findPath(aId, bId){
+  if(aId === bId) return [aId];
+  var adj = buildAdjacency();
+  var queue = [aId];
+  var prev = {}; prev[aId] = null;
+  var visited = {}; visited[aId] = true;
+  while(queue.length){
+    var cur = queue.shift();
+    if(cur === bId) break;
+    (adj[cur]||[]).forEach(function(n){
+      if(!visited[n]){ visited[n]=true; prev[n]=cur; queue.push(n); }
+    });
+  }
+  if(!visited[bId]) return null;
+  var path = [bId], node = bId;
+  while(prev[node] !== null && prev[node] !== undefined){
+    node = prev[node];
+    path.push(node);
+  }
+  path.reverse();
+  return path;
+}
+// how `toId` relates to `fromId`: "partner" | "parent" (toId is fromId's parent) | "child" (toId is fromId's child)
+function relationLabel(fromId, toId){
+  var a = people[fromId], b = people[toId];
+  if(a.partnerId === toId) return "partner";
+  if((a.parentIds||[]).indexOf(toId) !== -1) return "parent";
+  if((b.parentIds||[]).indexOf(fromId) !== -1) return "child";
+  return "related";
+}
+function describePath(path){
+  if(!path || path.length < 2) return fullName(people[path[0]]) + " — that's the same person.";
+  var parts = [fullName(people[path[0]])];
+  for(var i=1;i<path.length;i++){
+    var rel = relationLabel(path[i-1], path[i]);
+    var word = rel==="partner" ? "partner" : rel==="parent" ? "parent" : rel==="child" ? "child" : "relative";
+    parts.push("→ " + word + ": " + fullName(people[path[i]]));
+  }
+  return parts.join("  ");
+}
+function escapeHtml(s){
+  return String(s||"").replace(/[&<>"']/g, function(c){
+    return {"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c];
+  });
+}
+function toast(msg){
+  var t = document.getElementById("toast");
+  t.textContent = msg;
+  t.classList.add("show");
+  clearTimeout(toast._t);
+  toast._t = setTimeout(function(){ t.classList.remove("show"); }, 2200);
+}
+
+/* ================= Tree construction ================= */
+function buildChildrenMap(){
+  var map = {};
+  Object.keys(people).forEach(function(id){
+    var person = people[id];
+    (person.parentIds||[]).forEach(function(pid){
+      if(!people[pid]) return;
+      if(!map[pid]) map[pid] = [];
+      if(map[pid].indexOf(id) === -1) map[pid].push(id);
+    });
+  });
+  return map;
+}
+function computeGenerations(){
+  var gen = {};
+  function genOf(id, stack){
+    if(gen.hasOwnProperty(id)) return gen[id];
+    if(stack.indexOf(id) !== -1) { gen[id] = 0; return 0; } // guard against cycles
+    stack.push(id);
+    var person = people[id];
+    var parentIds = (person.parentIds||[]).filter(function(pid){ return people[pid]; });
+    if(parentIds.length === 0){
+      gen[id] = 0;
+    } else {
+      var maxG = -1;
+      parentIds.forEach(function(pid){ maxG = Math.max(maxG, genOf(pid, stack)); });
+      gen[id] = maxG + 1;
+    }
+    stack.pop();
+    return gen[id];
+  }
+  Object.keys(people).forEach(function(id){ genOf(id, []); });
+  // align partners to the same generation
+  Object.keys(people).forEach(function(id){
+    var person = people[id];
+    if(person.partnerId && people[person.partnerId]){
+      var g = Math.max(gen[id], gen[person.partnerId]);
+      gen[id] = g; gen[person.partnerId] = g;
+    }
+  });
+  return gen;
+}
+// Build the unit tree (a unit = one person, or a couple, plus the units of their children)
+function buildUnits(childrenMap, gen){
+  var visited = {};
+  var crossLinks = []; // {parentUnit, childId} -- a child already drawn elsewhere (married in) gets a connector instead of a duplicate card
+  function buildUnit(personId){
+    if(visited[personId]) return null;
+    visited[personId] = true;
+    var person = people[personId];
+    var partner = (person.partnerId && people[person.partnerId]) ? people[person.partnerId] : null;
+    if(partner) visited[partner.id] = true;
+    var members = partner ? [person, partner] : [person];
+    var childIds = {};
+    (childrenMap[personId]||[]).forEach(function(cid){ childIds[cid]=1; });
+    if(partner) (childrenMap[partner.id]||[]).forEach(function(cid){ childIds[cid]=1; });
+    var unit = { key: personId, members: members, childUnits: [], gen: gen[personId] };
+    Object.keys(childIds).sort(function(a,b){
+      return (parseInt(people[a].birthYear)||9999) - (parseInt(people[b].birthYear)||9999);
+    }).forEach(function(cid){
+      var u = buildUnit(cid);
+      if(u){
+        unit.childUnits.push(u);
+      } else {
+        // cid was already visited elsewhere -- they married into another branch.
+        // Keep a reference so we can draw a connector to wherever they actually ended up.
+        crossLinks.push({ parentUnit: unit, childId: cid });
+      }
+    });
+    return unit;
+  }
+  var roots = Object.keys(people).filter(function(id){
+    var person = people[id];
+    return !(person.parentIds||[]).some(function(pid){ return people[pid]; });
+  }).sort(function(a,b){ return (parseInt(people[a].birthYear)||9999) - (parseInt(people[b].birthYear)||9999); });
+  var top = [];
+  roots.forEach(function(id){
+    var u = buildUnit(id);
+    if(u) top.push(u);
+  });
+  return { top: top, crossLinks: crossLinks };
+}
+function assignX(units){
+  // A 2-member (couple) unit renders much wider than a single card -- CARD_W*2+SPOUSE_GAP,
+  // versus one COL_W-wide slot for a single person -- so it needs two leaf slots' worth of
+  // room, not one, or it overlaps whichever unit sits next to it. Critically, this applies
+  // even when the couple HAS children: an only child reserves just one slot on its own, but
+  // if its two parents need two, the couple's card pair still has to fit over that one slot
+  // and would spill into whoever is next door. So every unit reserves at least its own
+  // width (unit._w), bottom-up, as the max of that and its children's combined width; then
+  // positions are assigned top-down, centering each unit's children under it (or centering
+  // the unit itself over its children, when the children need more room than the unit does).
+  // unit.x ends up as the unit's CENTER, in COL_W-sized slot units (centerXOf turns it into
+  // a pixel position directly).
+  function leafWidth(unit){ return unit.members.length >= 2 ? 2 : 1; }
+  function computeWidth(unit){
+    if(unit.childUnits.length === 0){
+      unit._w = leafWidth(unit);
+    } else {
+      var childrenTotal = 0;
+      unit.childUnits.forEach(function(c){ childrenTotal += computeWidth(c); });
+      unit._w = Math.max(leafWidth(unit), childrenTotal);
+    }
+    return unit._w;
+  }
+  function place(unit, left){
+    unit.x = left + unit._w/2;
+    if(unit.childUnits.length){
+      var childrenTotal = 0;
+      unit.childUnits.forEach(function(c){ childrenTotal += c._w; });
+      var childLeft = left + (unit._w - childrenTotal)/2;
+      unit.childUnits.forEach(function(c){
+        place(c, childLeft);
+        childLeft += c._w;
+      });
+    }
+  }
+  var cursor = 0;
+  units.forEach(function(u){
+    computeWidth(u);
+    place(u, cursor);
+    cursor += u._w;
+  });
+  return cursor;
+}
+function flattenUnits(units, out){
+  out = out || [];
+  units.forEach(function(u){ out.push(u); flattenUnits(u.childUnits, out); });
+  return out;
+}
+
+/* ================= Rendering: Tree ================= */
+function centerXOf(unit){ return PAD + unit.x * COL_W; } // unit.x is already a center position, in COL_W-sized slot units (see assignX)
+function topYOf(unit){ return PAD + unit.gen * ROW_H; }
+
+function renderTree(liveOnly){
+  var canvas = document.getElementById("treeCanvas");
+  var svg = document.getElementById("treeSvg");
+  var empty = document.getElementById("emptyState");
+
+  // liveOnly is used while a card is actively being dragged: redraw the connectors on every
+  // frame so they track the card smoothly, without touching the card elements themselves
+  // (rebuilding them mid-drag would drop the pointer capture and cancel the drag).
+  if(!liveOnly){
+    Array.prototype.slice.call(canvas.querySelectorAll(".person-card, .unit-plus")).forEach(function(el){ el.remove(); });
+  }
+  svg.innerHTML = "";
+
+  var personIds = Object.keys(people);
+  if(personIds.length === 0){
+    empty.hidden = false;
+    canvas.style.width = "100%"; canvas.style.height = "100%";
+    return;
+  }
+  empty.hidden = true;
+
+  var childrenMap = buildChildrenMap();
+  var gen = computeGenerations();
+  var treeData = buildUnits(childrenMap, gen);
+  var top = treeData.top;
+  var crossLinks = treeData.crossLinks;
+  var leafCount = assignX(top);
+  var allUnits = flattenUnits(top);
+  var maxGen = 0;
+  allUnits.forEach(function(u){ maxGen = Math.max(maxGen, u.gen); });
+
+  // assign each separate top-level branch its own color -- everything hanging off the single
+  // biggest branch (the "main" line) keeps the plain neutral styling; every other branch
+  // (a disconnected lineage, or an in-law line pulled in via a dashed cross-link) gets a
+  // distinct color from the bright palette, falling back to the muted set once it's used up.
+  var branchColorOf = {};
+  (function(){
+    if(top.length <= 1) return;
+    var sizes = top.map(function(u){ return flattenUnits([u]).length; });
+    var mainIdx = 0;
+    for(var bi = 1; bi < sizes.length; bi++){ if(sizes[bi] > sizes[mainIdx]) mainIdx = bi; }
+    var palette = BRANCH_COLORS.concat(BRANCH_COLORS_FALLBACK);
+    var cursor = 0;
+    top.forEach(function(rootUnit, idx){
+      var color = null;
+      if(idx !== mainIdx){ color = palette[cursor % palette.length]; cursor++; }
+      flattenUnits([rootUnit]).forEach(function(u){ branchColorOf[u.key] = color; });
+    });
+  })();
+
+  // ---- pass 1: compute each unit's effective (drag-adjusted) position ----
+  var effPos = {};
+  var maxX = 0, maxY = 0;
+  allUnits.forEach(function(unit){
+    var cx = centerXOf(unit), topY = topYOf(unit);
+    var ep;
+    if(unit.members.length === 2){
+      var o0 = getOffset(unit.members[0]), o1 = getOffset(unit.members[1]);
+      var x0 = Math.max(4, cx - CARD_W - SPOUSE_GAP/2 + o0.dx), y0 = Math.max(4, topY + o0.dy);
+      var x1 = Math.max(4, cx + SPOUSE_GAP/2 + o1.dx), y1 = Math.max(4, topY + o1.dy);
+      // The trunk to this couple's children (and any incoming parent/cross-link) anchors to
+      // members[0] specifically -- the blood relative this branch is actually built from --
+      // rather than an average of both cards. unit.members[1] only ever got here by marriage
+      // (see buildUnit), so anchoring to members[0]'s own actual position means the connector
+      // always touches a real, currently-drawn card: it correctly follows when that person is
+      // dragged, and never goes stray into the gap when their partner is dragged elsewhere instead.
+      ep = { x0:x0, y0:y0, x1:x1, y1:y1, cx: x0 + CARD_W/2, topY: y0 };
+      maxX = Math.max(maxX, x0 + CARD_W, x1 + CARD_W); maxY = Math.max(maxY, y0 + CARD_H, y1 + CARD_H, topY + CARD_H);
+    } else {
+      var o = getOffset(unit.members[0]);
+      var sx = Math.max(4, cx - CARD_W/2 + o.dx), sy = Math.max(4, topY + o.dy);
+      ep = { x0: sx, y0: sy, cx: sx + CARD_W/2, topY: sy };
+      maxX = Math.max(maxX, sx + CARD_W); maxY = Math.max(maxY, sy + CARD_H);
+    }
+    effPos[unit.key] = ep;
+  });
+
+  var width = Math.max(leafCount * COL_W + PAD*2, maxX + PAD, 600);
+  var height = Math.max((maxGen+1) * ROW_H + PAD*2, maxY + PAD);
+  canvas.style.width = width + "px";
+  canvas.style.height = height + "px";
+  canvas.style.transform = "scale(" + zoom + ")";
+  canvas.style.transformOrigin = "0 0";
+  svg.setAttribute("width", width);
+  svg.setAttribute("height", height);
+  svg.setAttribute("viewBox", "0 0 " + width + " " + height);
+
+  var svgNS = "http://www.w3.org/2000/svg";
+  function line(x1,y1,x2,y2,color){
+    var l = document.createElementNS(svgNS,"line");
+    l.setAttribute("x1",x1); l.setAttribute("y1",y1); l.setAttribute("x2",x2); l.setAttribute("y2",y2);
+    l.setAttribute("stroke", color || "var(--line-strong)"); l.setAttribute("stroke-width", color ? "3" : "2.5");
+    svg.appendChild(l);
+  }
+  function crossLine(x1,y1,x2,y2,color){
+    var midY = (y1 + y2) / 2;
+    var p = document.createElementNS(svgNS,"path");
+    p.setAttribute("d","M"+x1+","+y1+" C "+x1+","+midY+" "+x2+","+midY+" "+x2+","+y2);
+    p.setAttribute("fill","none");
+    p.setAttribute("stroke", color || "var(--accent)");
+    p.setAttribute("stroke-width", color ? "3" : "2.5");
+    p.setAttribute("stroke-dasharray","4 5");
+    p.setAttribute("opacity","0.85");
+    svg.appendChild(p);
+  }
+  // an organic parent-to-child curve, drawn directly between the two cards' own anchor points --
+  // since it never relies on a shared bus line or a fixed column, it stays attached to both
+  // ends however far either one is dragged.
+  function familyCurve(x1,y1,x2,y2,color){
+    var bend = Math.max(24, Math.min(90, Math.abs(y2-y1) * 0.6));
+    var p = document.createElementNS(svgNS,"path");
+    p.setAttribute("d","M"+x1+","+y1+" C "+x1+","+(y1+bend)+" "+x2+","+(y2-bend)+" "+x2+","+y2);
+    p.setAttribute("fill","none");
+    p.setAttribute("stroke", color || "var(--line-strong)");
+    p.setAttribute("stroke-width", color ? "3" : "2.5");
+    svg.appendChild(p);
+  }
+
+  // ---- pass 2: draw connectors and cards from the effective positions ----
+  var cardPos = {};
+
+  allUnits.forEach(function(unit){
+    var ep = effPos[unit.key];
+
+    var bcolor = branchColorOf[unit.key];
+
+    if(unit.members.length === 2){
+      // marriage connector: edge-to-edge between the two cards' own midlines, so it still reads correctly if either was dragged
+      line(ep.x0 + CARD_W, ep.y0 + CARD_H/2, ep.x1, ep.y1 + CARD_H/2, bcolor);
+      if(!liveOnly){
+        placeCard(canvas, unit.members[0], ep.x0, ep.y0);
+        placeCard(canvas, unit.members[1], ep.x1, ep.y1);
+      }
+      cardPos[unit.members[0].id] = { x:ep.x0, y:ep.y0 };
+      cardPos[unit.members[1].id] = { x:ep.x1, y:ep.y1 };
+    } else {
+      if(!liveOnly){ placeCard(canvas, unit.members[0], ep.x0, ep.y0); }
+      cardPos[unit.members[0].id] = { x:ep.x0, y:ep.y0 };
+    }
+
+    // add-relative buttons for this unit (parent + child)
+    if(!liveOnly){ placeUnitControls(canvas, unit, ep); }
+
+    // children connectors: one organic curve per child, straight from this card to that card,
+    // so each stays visibly attached to both ends no matter how either is dragged
+    unit.childUnits.forEach(function(cu){
+      var cep = effPos[cu.key];
+      familyCurve(ep.cx, ep.topY + CARD_H, cep.cx, cep.topY, bcolor);
+    });
+  });
+
+  // cross-links: connect a parent unit down to a child who already married into, and is drawn in, another branch
+  crossLinks.forEach(function(cl){
+    var childPos = cardPos[cl.childId];
+    if(!childPos) return;
+    var pep = effPos[cl.parentUnit.key];
+    var startX = pep.cx, startY = pep.topY + CARD_H;
+    var endX = childPos.x + CARD_W/2, endY = childPos.y;
+    crossLine(startX, startY, endX, endY, branchColorOf[cl.parentUnit.key]);
+  });
+
+  // trace: thicken the connectors along the path between two searched people
+  function traceLine(x1,y1,x2,y2,curved){
+    var el;
+    if(curved){
+      var midY = (y1+y2)/2;
+      el = document.createElementNS(svgNS,"path");
+      el.setAttribute("d","M"+x1+","+y1+" C "+x1+","+midY+" "+x2+","+midY+" "+x2+","+y2);
+      el.setAttribute("fill","none");
+    } else {
+      el = document.createElementNS(svgNS,"line");
+      el.setAttribute("x1",x1); el.setAttribute("y1",y1); el.setAttribute("x2",x2); el.setAttribute("y2",y2);
+    }
+    el.setAttribute("stroke","var(--trace)");
+    el.setAttribute("stroke-width","5.5");
+    el.setAttribute("stroke-linecap","round");
+    el.setAttribute("opacity","0.95");
+    svg.appendChild(el);
+  }
+  if(highlightPath && highlightPath.length > 1){
+    for(var hi = 1; hi < highlightPath.length; hi++){
+      var fromId = highlightPath[hi-1], toId = highlightPath[hi];
+      var fp = cardPos[fromId], tp = cardPos[toId];
+      if(!fp || !tp) continue;
+      var rel = relationLabel(fromId, toId);
+      if(rel === "partner"){
+        traceLine(fp.x + CARD_W/2, fp.y + CARD_H/2, tp.x + CARD_W/2, tp.y + CARD_H/2, false);
+      } else {
+        var parentPos = (rel === "parent") ? tp : fp;
+        var childPos2 = (rel === "parent") ? fp : tp;
+        traceLine(parentPos.x + CARD_W/2, parentPos.y + CARD_H, childPos2.x + CARD_W/2, childPos2.y, true);
+      }
+    }
+    [highlightPath[0], highlightPath[highlightPath.length-1]].forEach(function(pid){
+      var el = canvas.querySelector('.person-card[data-id="'+pid+'"]');
+      if(el) el.classList.add("trace-endpoint");
+    });
+  }
+}
+
+function placeCard(canvas, person, x, y){
+  var card = document.createElement("div");
+  card.className = "person-card";
+  card.style.left = x + "px";
+  card.style.top = y + "px";
+  card.dataset.id = person.id;
+  card.tabIndex = 0;
+  card.setAttribute("role","button");
+  card.setAttribute("aria-label","Open " + fullName(person));
+
+  var avatarHtml;
+  if(person.photo){
+    avatarHtml = '<div class="avatar" style="background-image:url(\'' + person.photo + '\')"></div>';
+  } else {
+    avatarHtml = '<div class="avatar" style="background:' + avatarColor(person.id) + ';color:' + avatarInk(person.id) + '">' + escapeHtml(initials(person)) + '</div>';
+  }
+
+  var maidenHtml = person.maidenName ? ' <span class="p-maiden">née ' + escapeHtml(person.maidenName) + '</span>' : '';
+  var datesHtml = displayDates(person) ? '<div class="p-dates">' + escapeHtml(displayDates(person)) + '</div>' : '';
+  var detailsHtml = person.details ? '<div class="p-details">' + escapeHtml(person.details) + '</div>' : '';
+
+  card.innerHTML =
+    avatarHtml +
+    '<button type="button" class="p-btn textwrap">' +
+      '<div class="p-name">' + escapeHtml(fullName(person)) + maidenHtml + '</div>' +
+      datesHtml + detailsHtml +
+    '</button>';
+
+  // --- dragging: grab anywhere on the card except the avatar, to reposition it freely ---
+  card.style.touchAction = "none";
+  var drag = null;
+  card.addEventListener("pointerdown", function(e){
+    if(e.target.closest(".avatar")) return;
+    if(e.button !== undefined && e.button !== 0) return;
+    drag = { startX:e.clientX, startY:e.clientY, moved:false };
+    try{ card.setPointerCapture(e.pointerId); }catch(err){}
+  });
+  card.addEventListener("pointermove", function(e){
+    if(!drag) return;
+    var dx = (e.clientX - drag.startX) / zoom;
+    var dy = (e.clientY - drag.startY) / zoom;
+    if(!drag.moved && (Math.abs(dx) > 3 || Math.abs(dy) > 3)){
+      drag.moved = true;
+      card.style.zIndex = "5";
+    }
+    if(drag.moved){
+      card.style.transform = "translate(" + dx + "px," + dy + "px)";
+      liveDragOverride = { personId: person.id, dx: dx, dy: dy };
+      if(!dragRafPending){
+        dragRafPending = true;
+        requestAnimationFrame(function(){
+          dragRafPending = false;
+          if(drag && drag.moved) renderTree(true);
+        });
+      }
+    }
+  });
+  function endDrag(e){
+    if(!drag) return;
+    var startX = drag.startX, startY = drag.startY, moved = drag.moved;
+    drag = null;
+    liveDragOverride = null;
+    if(!moved) return; // a plain click: leave the DOM alone so the upcoming "click" event still fires and opens the edit modal
+    var dx = (e.clientX - startX) / zoom;
+    var dy = (e.clientY - startY) / zoom;
+    var prev = person.posOffset || { dx:0, dy:0 };
+    person.posOffset = { dx: prev.dx + dx, dy: prev.dy + dy };
+    isExample = false;
+    saveState();
+    suppressNextClick = true;
+    renderTree();
+  }
+  card.addEventListener("pointerup", endDrag);
+  card.addEventListener("pointercancel", function(){
+    drag = null;
+    liveDragOverride = null;
+    card.style.transform = "";
+    card.style.zIndex = "";
+    renderTree(true);
+  });
+
+  card.addEventListener("click", function(e){
+    if(suppressNextClick){ suppressNextClick = false; return; }
+    if(e.target.closest(".avatar")) return;
+    openEdit(person.id);
+  });
+  card.addEventListener("keydown", function(e){
+    if(e.key === "Enter" || e.key === " "){ e.preventDefault(); openEdit(person.id); }
+  });
+  canvas.appendChild(card);
+}
+
+function placeUnitControls(canvas, unit, ep){
+  var cx = ep.cx, topY = ep.topY;
+  // "add partner" shown only for single-member units, to the right of the card
+  if(unit.members.length === 1){
+    var addPartner = document.createElement("button");
+    addPartner.className = "unit-plus";
+    addPartner.title = "Add partner";
+    addPartner.textContent = "+";
+    addPartner.style.left = (ep.x0 + CARD_W + 6) + "px";
+    addPartner.style.top = (ep.y0 + CARD_H/2 - 11) + "px";
+    addPartner.addEventListener("click", function(ev){
+      ev.stopPropagation();
+      startRelationship("partner", unit.members[0].id);
+    });
+    canvas.appendChild(addPartner);
+  }
+  // "add parent" shown above EACH member who doesn't yet have parents recorded,
+  // so a partner's own side of the family can branch upward too, independent of the main line
+  unit.members.forEach(function(member, idx){
+    var hasParents = (member.parentIds||[]).some(function(pid){ return people[pid]; });
+    if(hasParents) return;
+    var memberCx, memberTopY;
+    if(unit.members.length === 2){
+      memberCx = (idx === 0) ? (ep.x0 + CARD_W/2) : (ep.x1 + CARD_W/2);
+      memberTopY = (idx === 0) ? ep.y0 : ep.y1;
+    } else {
+      memberCx = ep.x0 + CARD_W/2;
+      memberTopY = ep.y0;
+    }
+    var addParent = document.createElement("button");
+    addParent.className = "unit-plus";
+    addParent.title = "Add parent for " + fullName(member);
+    addParent.textContent = "+";
+    addParent.style.left = (memberCx - 11) + "px";
+    addParent.style.top = (memberTopY - 30) + "px";
+    addParent.addEventListener("click", function(ev){
+      ev.stopPropagation();
+      startRelationship("parent", member.id);
+    });
+    canvas.appendChild(addParent);
+  });
+  // "add child" below the unit
+  var addChild = document.createElement("button");
+  addChild.className = "unit-plus";
+  addChild.title = "Add child";
+  addChild.textContent = "+";
+  addChild.style.left = (cx - 11) + "px";
+  addChild.style.top = (topY + CARD_H + 6) + "px";
+  addChild.addEventListener("click", function(ev){
+    ev.stopPropagation();
+    startRelationship("child", unit.members[0].id);
+  });
+  canvas.appendChild(addChild);
+}
+
+/* ================= Rendering: List ================= */
+function renderList(){
+  var tbody = document.getElementById("pplTbody");
+  var q = (document.getElementById("searchInput").value||"").trim().toLowerCase();
+  var rows = Object.keys(people).map(function(id){ return people[id]; });
+  rows.sort(function(a,b){ return (parseInt(a.birthYear)||9999) - (parseInt(b.birthYear)||9999); });
+  if(q){
+    rows = rows.filter(function(p){
+      return fullName(p).toLowerCase().indexOf(q) !== -1 ||
+             (p.maidenName||"").toLowerCase().indexOf(q) !== -1 ||
+             (p.details||"").toLowerCase().indexOf(q) !== -1;
+    });
+  }
+  var childrenMap = buildChildrenMap();
+  tbody.innerHTML = rows.map(function(p){
+    var av = p.photo ? 'style="background-image:url(\''+p.photo+'\')"' : 'style="background:'+avatarColor(p.id)+';color:'+avatarInk(p.id)+'"';
+    var avContent = p.photo ? '' : escapeHtml(initials(p));
+    var parentsStr = (p.parentIds||[]).filter(function(pid){return people[pid];}).map(function(pid){ return fullName(people[pid]); }).join(" & ") || '<span class="muted">—</span>';
+    var partnerStr = (p.partnerId && people[p.partnerId]) ? fullName(people[p.partnerId]) : '<span class="muted">—</span>';
+    var childCount = (childrenMap[p.id]||[]).length;
+    var ageStr = ageInfo(p);
+    return '<tr data-id="'+p.id+'">' +
+      '<td><div class="row-avatar" '+av+'>'+avContent+'</div></td>' +
+      '<td>' + escapeHtml(fullName(p)) + (p.maidenName ? ' <span class="muted">née '+escapeHtml(p.maidenName)+'</span>' : '') + '</td>' +
+      '<td>' + escapeHtml(p.birthYear||"—") + '</td>' +
+      '<td>' + escapeHtml(p.deathYear||"—") + '</td>' +
+      '<td>' + (ageStr ? escapeHtml(ageStr) : '<span class="muted">—</span>') + '</td>' +
+      '<td>' + parentsStr + '</td>' +
+      '<td>' + partnerStr + '</td>' +
+      '<td>' + (childCount || '<span class="muted">0</span>') + '</td>' +
+    '</tr>';
+  }).join("") || '<tr><td colspan="8" style="padding:24px 10px;color:var(--ink-muted);text-align:center;">No one matches that search.</td></tr>';
+
+  Array.prototype.slice.call(tbody.querySelectorAll("tr[data-id]")).forEach(function(tr){
+    tr.addEventListener("click", function(){ openEdit(tr.dataset.id); });
+  });
+}
+
+/* ================= Edit modal ================= */
+function startRelationship(kind, anchorId){
+  pendingRelAction = { kind: kind, anchorId: anchorId };
+  var fresh = {
+    id: uid(), firstName:"", lastName:"", maidenName:"", birthYear:"", deathYear:"",
+    details:"", notes:"", photo:"", partnerId:"", parentIds:[]
+  };
+  var anchor = people[anchorId];
+  if(kind === "child" && anchor){
+    fresh.lastName = anchor.lastName || "";
+    fresh.parentIds = anchor.partnerId ? [anchor.id, anchor.partnerId] : [anchor.id];
+  }
+  if(kind === "sibling" && anchor){
+    fresh.lastName = anchor.lastName || "";
+    fresh.parentIds = (anchor.parentIds||[]).slice();
+  }
+  if(kind === "parent" && anchor){
+    fresh.lastName = anchor.lastName || "";
+  }
+  openEdit(null, fresh);
+}
+
+function openEdit(id, draft){
+  editingId = id;
+  var person = id ? people[id] : draft;
+  var isNew = !id;
+
+  var overlay = document.createElement("div");
+  overlay.className = "overlay";
+  overlay.id = "editOverlay";
+
+  var relButtons = "";
+  if(!isNew){
+    relButtons = '<div class="field"><label>Add a relative</label><div class="relbtns">' +
+      '<button class="btn" data-rel="parent">+ Parent</button>' +
+      '<button class="btn" data-rel="partner">+ Partner</button>' +
+      '<button class="btn" data-rel="child">+ Child</button>' +
+      '<button class="btn" data-rel="sibling">+ Sibling</button>' +
+    '</div></div>';
+  }
+
+  var avatarInner = person.photo
+    ? '<div class="modal-avatar" style="background-image:url(\''+person.photo+'\')" id="modalAvatarPreview"></div>'
+    : '<div class="modal-avatar" id="modalAvatarPreview" style="background:'+avatarColor(person.id)+';color:'+avatarInk(person.id)+'">'+escapeHtml(initials(person))+'</div>';
+
+  overlay.innerHTML =
+  '<div class="modal">' +
+    '<div class="modal-head">' +
+      '<h2>' + (isNew ? "Add person" : "Edit person") + '</h2>' +
+      '<button class="modal-close" id="closeModal" aria-label="Close">' +
+        '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>' +
+      '</button>' +
+    '</div>' +
+    '<div class="modal-body">' +
+      '<div class="modal-avatar-row">' +
+        avatarInner +
+        '<div>' +
+          '<label class="btn" style="position:relative; overflow:hidden; display:inline-flex;">Upload photo' +
+            '<input type="file" accept="image/*" id="photoInput" style="position:absolute;inset:0;opacity:0;cursor:pointer;">' +
+          '</label>' +
+          (person.photo ? '<button class="btn ghost" id="removePhoto" style="margin-left:6px;">Remove</button>' : '') +
+        '</div>' +
+      '</div>' +
+      '<div class="field-row">' +
+        '<div class="field"><label>First name</label><input id="fFirst" value="'+escapeHtml(person.firstName)+'"></div>' +
+        '<div class="field"><label>Last name</label><input id="fLast" value="'+escapeHtml(person.lastName)+'"></div>' +
+      '</div>' +
+      (isNew ? '<div id="nameMatchBox" hidden style="margin:-2px 0 10px;padding:9px 10px;border:1px solid var(--line-strong);border-radius:8px;background:var(--accent-soft);font-size:12.5px;line-height:1.5;"></div>' : '') +
+      '<div class="field"><label>Maiden name (optional)</label><input id="fMaiden" value="'+escapeHtml(person.maidenName)+'"></div>' +
+      '<div class="field-row">' +
+        '<div class="field"><label>Birth year</label><input id="fBirth" value="'+escapeHtml(person.birthYear)+'" inputmode="numeric" placeholder="e.g. 1978"></div>' +
+        '<div class="field"><label>Death year (if applicable)</label><input id="fDeath" value="'+escapeHtml(person.deathYear)+'" inputmode="numeric" placeholder="leave blank if living"></div>' +
+      '</div>' +
+      '<div class="field"><label>Occupation / location</label><input id="fDetails" value="'+escapeHtml(person.details)+'" placeholder="e.g. Teacher · Austin, TX"></div>' +
+      '<div class="field"><label>Notes</label><textarea id="fNotes" placeholder="Stories, memories, anything worth keeping…">'+escapeHtml(person.notes)+'</textarea></div>' +
+      relButtons +
+    '</div>' +
+    '<div class="modal-foot" id="modalFoot">' +
+      '<button class="btn primary" id="saveBtn">Save</button>' +
+      '<button class="btn ghost" id="cancelBtn">Cancel</button>' +
+      (!isNew ? (adminUnlocked
+        ? '<button class="btn danger" id="deleteBtn" style="margin-left:auto;">Delete person</button>'
+        : '<span class="muted" style="margin-left:auto;font-size:11.5px;max-width:230px;line-height:1.4;">Only the tree\'s admin can delete people. Unlock admin mode from the top bar.</span>'
+      ) : '') +
+    '</div>' +
+  '</div>';
+
+  document.body.appendChild(overlay);
+
+  var pendingPhoto = person.photo || "";
+
+  overlay.querySelector("#closeModal").addEventListener("click", close);
+  overlay.querySelector("#cancelBtn").addEventListener("click", close);
+  overlay.addEventListener("click", function(e){ if(e.target === overlay) close(); });
+
+  overlay.querySelector("#photoInput").addEventListener("change", function(e){
+    var file = e.target.files[0];
+    if(!file) return;
+    resizeImage(file, 220, 0.85).then(function(dataUrl){
+      pendingPhoto = dataUrl;
+      var prev = document.getElementById("modalAvatarPreview");
+      prev.style.backgroundImage = "url('" + dataUrl + "')";
+      prev.textContent = "";
+      prev.style.background = "";
+      prev.style.backgroundImage = "url('" + dataUrl + "')";
+      prev.style.backgroundSize = "cover";
+      prev.style.backgroundPosition = "center";
+    }).catch(function(){ toast("Could not read that image."); });
+  });
+  var removeBtn = overlay.querySelector("#removePhoto");
+  if(removeBtn){
+    removeBtn.addEventListener("click", function(){
+      pendingPhoto = "";
+      var prev = document.getElementById("modalAvatarPreview");
+      prev.style.backgroundImage = "";
+      prev.style.background = avatarColor(person.id);
+      prev.style.color = avatarInk(person.id);
+      prev.textContent = initials(person);
+    });
+  }
+
+  var linkedExistingId = null;
+  var nameMatchBox = overlay.querySelector("#nameMatchBox");
+  if(isNew && nameMatchBox){
+    var excludeIds = pendingRelAction ? [pendingRelAction.anchorId] : [];
+    var matchTimer = null;
+    var renderMatches = function(){
+      linkedExistingId = null; // typing again cancels a previously chosen link
+      var fn = overlay.querySelector("#fFirst").value.trim();
+      var ln = overlay.querySelector("#fLast").value.trim();
+      var matches = findNameMatches(fn, ln, excludeIds);
+      if(!matches.length){ nameMatchBox.hidden = true; nameMatchBox.innerHTML = ""; return; }
+      nameMatchBox.hidden = false;
+      nameMatchBox.innerHTML = "Already in the tree — could this be the same person?<br>" +
+        matches.map(function(m){
+          var dates = displayDates(m.person);
+          return '<button type="button" class="btn ghost" data-link="'+m.id+'" style="margin:5px 5px 0 0;padding:4px 9px;font-size:12px;">Use '+
+            escapeHtml(fullName(m.person)) + (dates ? " (" + escapeHtml(dates) + ")" : "") + '</button>';
+        }).join("");
+      Array.prototype.slice.call(nameMatchBox.querySelectorAll("[data-link]")).forEach(function(btn){
+        btn.addEventListener("click", function(){
+          linkedExistingId = btn.dataset.link;
+          nameMatchBox.innerHTML = 'Will link to the existing person <strong>' + escapeHtml(fullName(people[linkedExistingId])) +
+            '</strong> instead of creating a new one.' +
+            ' <button type="button" class="btn ghost" id="undoLinkMatch" style="margin-left:4px;padding:3px 8px;font-size:11.5px;">Undo</button>';
+          overlay.querySelector("#undoLinkMatch").addEventListener("click", renderMatches);
+        });
+      });
+    };
+    overlay.querySelector("#fFirst").addEventListener("input", function(){ clearTimeout(matchTimer); matchTimer = setTimeout(renderMatches, 250); });
+    overlay.querySelector("#fLast").addEventListener("input", function(){ clearTimeout(matchTimer); matchTimer = setTimeout(renderMatches, 250); });
+    renderMatches();
+  }
+
+  if(!isNew){
+    Array.prototype.slice.call(overlay.querySelectorAll("[data-rel]")).forEach(function(btn){
+      btn.addEventListener("click", function(){
+        var kind = btn.dataset.rel;
+        close();
+        startRelationship(kind, id);
+      });
+    });
+    var deleteBtn = overlay.querySelector("#deleteBtn");
+    if(deleteBtn){
+      deleteBtn.addEventListener("click", function(){
+        var foot = document.getElementById("modalFoot");
+        var descCount = countDescendants(id);
+        var warn = descCount > 0
+          ? (" They have " + descCount + " recorded descendant" + (descCount === 1 ? "" : "s") + " connected below them — deleting them won't delete those people, but will disconnect this link, one person at a time.")
+          : "";
+        foot.innerHTML = '<div class="confirm-del">Delete '+escapeHtml(fullName(person))+'?' + warn +
+          '<button class="btn danger" id="confirmDel">Delete</button>' +
+          '<button class="btn ghost" id="cancelDel">Cancel</button></div>';
+        document.getElementById("confirmDel").addEventListener("click", function(){
+          deletePerson(id);
+          close();
+        });
+        document.getElementById("cancelDel").addEventListener("click", function(){ close(); openEdit(id); });
+      });
+    }
+  }
+
+  overlay.querySelector("#saveBtn").addEventListener("click", function(){
+    var firstName = overlay.querySelector("#fFirst").value.trim();
+    var lastName = overlay.querySelector("#fLast").value.trim();
+    if(!firstName && !lastName){ toast("Give this person at least a name."); return; }
+
+    if(isNew && linkedExistingId){
+      var linkedName = fullName(people[linkedExistingId]);
+      if(applyPendingRelationshipToExisting(linkedExistingId) === false) return; // toast already shown; keep modal open
+      pendingRelAction = null;
+      close();
+      renderAll();
+      toast("Linked to " + linkedName + ".");
+      return;
+    }
+
+    person.firstName = firstName;
+    person.lastName = lastName;
+    person.maidenName = overlay.querySelector("#fMaiden").value.trim();
+    person.birthYear = overlay.querySelector("#fBirth").value.trim();
+    person.deathYear = overlay.querySelector("#fDeath").value.trim();
+    person.details = overlay.querySelector("#fDetails").value.trim();
+    person.notes = overlay.querySelector("#fNotes").value.trim();
+    person.photo = pendingPhoto;
+
+    people[person.id] = person;
+
+    if(isNew && pendingRelAction){
+      applyPendingRelationship(person.id);
+    }
+    pendingRelAction = null;
+    isExample = false;
+    saveState();
+    close();
+    renderAll();
+    toast("Saved " + fullName(person));
+  });
+
+  function close(){ overlay.remove(); editingId = null; }
+}
+
+function applyPendingRelationship(newId){
+  var action = pendingRelAction;
+  var anchor = people[action.anchorId];
+  var np = people[newId];
+  if(!anchor) return;
+  if(action.kind === "partner"){
+    anchor.partnerId = newId;
+    np.partnerId = anchor.id;
+  } else if(action.kind === "child"){
+    np.parentIds = anchor.partnerId ? [anchor.id, anchor.partnerId] : [anchor.id];
+  } else if(action.kind === "sibling"){
+    np.parentIds = (anchor.parentIds||[]).slice();
+  } else if(action.kind === "parent"){
+    // attach as a parent of anchor (and anchor's partner-produced siblings share same parent set)
+    var existing = (anchor.parentIds||[]).filter(function(pid){ return people[pid]; });
+    if(existing.length >= 2){ toast("This person already has two parents recorded."); return; }
+    anchor.parentIds = existing.concat([newId]);
+  }
+}
+// Same relationship actions as applyPendingRelationship, but linking to a person who
+// already exists in the tree (picked from the name-match suggestions) instead of a
+// freshly created one -- so e.g. a second child's "parent" naturally reuses the SAME
+// parent record their sibling already has, rather than creating a same-named duplicate.
+// Returns false (and shows a toast) when the link isn't safe to make as-is.
+function applyPendingRelationshipToExisting(existingId){
+  var action = pendingRelAction;
+  if(!action) return true; // plain "Add person" matched an existing name -- nothing to connect, just don't duplicate
+  var anchor = people[action.anchorId];
+  var existing = people[existingId];
+  if(!anchor || !existing) return true;
+  if(existingId === action.anchorId){
+    toast("That's the same person you're adding a relative for.");
+    return false;
+  }
+  if(action.kind === "partner"){
+    if(existing.partnerId && existing.partnerId !== anchor.id){
+      toast(fullName(existing) + " already has a different partner recorded.");
+      return false;
+    }
+    if(anchor.partnerId && anchor.partnerId !== existingId){
+      toast(fullName(anchor) + " already has a different partner recorded.");
+      return false;
+    }
+    anchor.partnerId = existingId;
+    existing.partnerId = anchor.id;
+  } else if(action.kind === "child"){
+    var wantParents = anchor.partnerId ? [anchor.id, anchor.partnerId] : [anchor.id];
+    var curParents = (existing.parentIds||[]).filter(function(pid){ return people[pid]; });
+    if(curParents.length && !sameIdSet(curParents, wantParents)){
+      toast(fullName(existing) + " already has different parents recorded — edit them directly to relink.");
+      return false;
+    }
+    existing.parentIds = wantParents;
+  } else if(action.kind === "sibling"){
+    var anchorParents = (anchor.parentIds||[]).filter(function(pid){ return people[pid]; });
+    var existingParents = (existing.parentIds||[]).filter(function(pid){ return people[pid]; });
+    if(anchorParents.length && existingParents.length && !sameIdSet(anchorParents, existingParents)){
+      toast("These two already have different parents recorded — edit them directly to relink.");
+      return false;
+    }
+    if(!existingParents.length && anchorParents.length) existing.parentIds = anchorParents.slice();
+    if(!anchorParents.length && existingParents.length) anchor.parentIds = existingParents.slice();
+  } else if(action.kind === "parent"){
+    var curAnchorParents = (anchor.parentIds||[]).filter(function(pid){ return people[pid]; });
+    if(curAnchorParents.indexOf(existingId) !== -1){
+      toast(fullName(existing) + " is already recorded as a parent.");
+      return false;
+    }
+    if(curAnchorParents.length >= 2){
+      toast("This person already has two parents recorded.");
+      return false;
+    }
+    anchor.parentIds = curAnchorParents.concat([existingId]);
+  }
+  isExample = false;
+  saveState();
+  return true;
+}
+
+/* ================= Admin lock ================= */
+function updateAdminButton(){
+  var btn = document.getElementById("adminBtn");
+  var label = document.getElementById("adminLabel");
+  if(!btn) return;
+  if(adminUnlocked){
+    btn.classList.add("admin-unlocked");
+    label.textContent = "Admin ✓";
+    btn.title = "Admin mode is unlocked — click to lock it again";
+  } else {
+    btn.classList.remove("admin-unlocked");
+    label.textContent = "Admin";
+    btn.title = "Admin mode (needed to delete people) — click to unlock";
+  }
+}
+function countDescendants(id){
+  var map = buildChildrenMap();
+  var seen = {};
+  function walk(pid){
+    (map[pid]||[]).forEach(function(cid){
+      if(!seen[cid]){ seen[cid] = true; walk(cid); }
+    });
+  }
+  walk(id);
+  return Object.keys(seen).length;
+}
+function openAdminLogin(){
+  var overlay = document.createElement("div");
+  overlay.className = "overlay";
+  overlay.innerHTML =
+    '<div class="modal"><div class="modal-head"><h2>Unlock admin mode</h2>' +
+      '<button class="modal-close" id="alClose" aria-label="Close">' +
+        '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>' +
+      '</button></div>' +
+    '<div class="modal-body">' +
+      '<p style="font-size:12.5px;color:var(--ink-muted);margin:0;">Deleting people is restricted to the tree\'s admin. Enter the admin username and password to unlock it for this browser.</p>' +
+      '<div class="field"><label>Username</label><input id="alUser" autocomplete="username"></div>' +
+      '<div class="field"><label>Password</label><input id="alPass" type="password" autocomplete="current-password"></div>' +
+      '<p id="alError" style="display:none;color:var(--danger);font-size:12px;margin:0;">That username or password isn\'t right.</p>' +
+    '</div>' +
+    '<div class="modal-foot">' +
+      '<button class="btn primary" id="alUnlock">Unlock</button>' +
+      '<button class="btn ghost" id="alCancel">Cancel</button>' +
+    '</div></div>';
+  document.body.appendChild(overlay);
+  function close(){ overlay.remove(); }
+  overlay.querySelector("#alClose").addEventListener("click", close);
+  overlay.querySelector("#alCancel").addEventListener("click", close);
+  overlay.addEventListener("click", function(e){ if(e.target === overlay) close(); });
+  function attempt(){
+    var u = overlay.querySelector("#alUser").value.trim();
+    var p = overlay.querySelector("#alPass").value;
+    if(u === ADMIN_USER && p === ADMIN_PASS){
+      adminUnlocked = true;
+      try{ sessionStorage.setItem("ftAdmin", "1"); }catch(e){}
+      updateAdminButton();
+      close();
+      toast("Admin mode unlocked for this browser.");
+    } else {
+      overlay.querySelector("#alError").style.display = "block";
+    }
+  }
+  overlay.querySelector("#alUnlock").addEventListener("click", attempt);
+  overlay.querySelector("#alPass").addEventListener("keydown", function(e){ if(e.key === "Enter") attempt(); });
+  overlay.querySelector("#alUser").focus();
+}
+
+function deletePerson(id){
+  var person = people[id];
+  if(!person) return;
+  if(person.partnerId && people[person.partnerId]){
+    people[person.partnerId].partnerId = "";
+  }
+  Object.keys(people).forEach(function(pid){
+    var pr = people[pid];
+    if(pr.parentIds && pr.parentIds.indexOf(id) !== -1){
+      pr.parentIds = pr.parentIds.filter(function(x){ return x !== id; });
+    }
+  });
+  delete people[id];
+  pendingDbDeletes.push(id);
+  isExample = false;
+  saveState();
+  renderAll();
+  toast("Removed from the tree.");
+}
+
+/* ================= Image resize ================= */
+function resizeImage(file, maxSize, quality){
+  return new Promise(function(resolve, reject){
+    var reader = new FileReader();
+    reader.onload = function(e){
+      var img = new Image();
+      img.onload = function(){
+        var w = img.width, h = img.height;
+        var scale = Math.min(1, maxSize / Math.max(w,h));
+        w = Math.max(1, Math.round(w*scale));
+        h = Math.max(1, Math.round(h*scale));
+        var canvas = document.createElement("canvas");
+        canvas.width = w; canvas.height = h;
+        var ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, w, h);
+        try{ resolve(canvas.toDataURL("image/jpeg", quality)); }
+        catch(err){ reject(err); }
+      };
+      img.onerror = reject;
+      img.src = e.target.result;
+    };
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+}
+
+/* ================= Import / Export (clipboard-based; downloads are blocked) ================= */
+function exportJSON(){
+  var data = JSON.stringify({ people: people }, null, 2);
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(data).then(function(){
+      toast("Tree data copied — paste it anywhere to save a backup.");
+    }).catch(function(){ showImportExportFallback(data); });
+  } else {
+    showImportExportFallback(data);
+  }
+}
+function showImportExportFallback(prefill){
+  var overlay = document.createElement("div");
+  overlay.className = "overlay";
+  overlay.id = "importOverlay";
+  overlay.innerHTML =
+    '<div class="modal"><div class="modal-head"><h2>Tree data</h2>' +
+      '<button class="modal-close" id="ieClose">' +
+        '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>' +
+      '</button></div>' +
+    '<div class="modal-body">' +
+      '<div class="field"><label>' + (prefill ? "Copy this to save a backup" : "Paste tree data to import") + '</label>' +
+      '<textarea id="ieText">' + escapeHtml(prefill||"") + '</textarea></div>' +
+    '</div>' +
+    '<div class="modal-foot">' +
+      (prefill ? '' : '<button class="btn primary" id="ieImport">Import</button>') +
+      '<button class="btn ghost" id="ieCancel">Close</button>' +
+    '</div></div>';
+  document.body.appendChild(overlay);
+  overlay.querySelector("#ieClose").addEventListener("click", function(){ overlay.remove(); });
+  overlay.querySelector("#ieCancel").addEventListener("click", function(){ overlay.remove(); });
+  overlay.addEventListener("click", function(e){ if(e.target===overlay) overlay.remove(); });
+  var importBtn = overlay.querySelector("#ieImport");
+  if(importBtn){
+    importBtn.addEventListener("click", function(){
+      try{
+        var parsed = JSON.parse(overlay.querySelector("#ieText").value);
+        var newPeople = parsed.people || parsed;
+        if(!newPeople || typeof newPeople !== "object") throw new Error("bad shape");
+        pendingDbDeletes = pendingDbDeletes.concat(Object.keys(people));
+        people = newPeople;
+        isExample = false;
+        saveState();
+        renderAll();
+        overlay.remove();
+        toast("Tree imported.");
+      }catch(err){
+        toast("That didn't look like valid tree data.");
+      }
+    });
+  }
+}
+function importJSON(){
+  if(navigator.clipboard && navigator.clipboard.readText){
+    navigator.clipboard.readText().then(function(text){
+      try{
+        var parsed = JSON.parse(text);
+        var newPeople = parsed.people || parsed;
+        if(!newPeople || typeof newPeople !== "object") throw new Error("bad");
+        pendingDbDeletes = pendingDbDeletes.concat(Object.keys(people));
+        people = newPeople;
+        isExample = false;
+        saveState();
+        renderAll();
+        toast("Tree imported from clipboard.");
+      }catch(e){
+        showImportExportFallback("");
+      }
+    }).catch(function(){ showImportExportFallback(""); });
+  } else {
+    showImportExportFallback("");
+  }
+}
+
+/* ================= More menu ================= */
+function toggleMoreMenu(){
+  var existing = document.getElementById("moreMenu");
+  if(existing){ existing.remove(); return; }
+  var btn = document.getElementById("moreBtn");
+  var rect = btn.getBoundingClientRect();
+  var menu = document.createElement("div");
+  menu.id = "moreMenu";
+  menu.style.cssText = "position:fixed;z-index:60;background:var(--surface);border:1px solid var(--line-strong);border-radius:10px;box-shadow:var(--shadow);padding:6px;min-width:190px;right:"+(window.innerWidth-rect.right)+"px;top:"+(rect.bottom+6)+"px;display:flex;flex-direction:column;";
+  function item(label){
+    var b = document.createElement("button");
+    b.textContent = label;
+    b.style.cssText = "all:unset;cursor:pointer;padding:8px 10px;border-radius:7px;font-size:13px;color:var(--ink);";
+    b.addEventListener("mouseenter", function(){ b.style.background = "var(--accent-soft)"; });
+    b.addEventListener("mouseleave", function(){ b.style.background = "transparent"; });
+    return b;
+  }
+  var resetItem = item("Reset card positions");
+  resetItem.addEventListener("click", function(){
+    menu.remove();
+    Object.keys(people).forEach(function(id){ delete people[id].posOffset; });
+    saveState();
+    renderAll();
+    toast("Cards snapped back to the automatic layout.");
+  });
+  var copyItem = item("Copy tree data (backup)");
+  copyItem.addEventListener("click", function(){ menu.remove(); exportJSON(); });
+  var importItem = item("Import tree data…");
+  importItem.addEventListener("click", function(){ menu.remove(); importJSON(); });
+  var excelItem = item("Export to Excel (.xlsx)");
+  excelItem.addEventListener("click", function(){ menu.remove(); exportExcel(); });
+  menu.appendChild(resetItem);
+  menu.appendChild(copyItem);
+  menu.appendChild(importItem);
+  menu.appendChild(excelItem);
+  if(!window.claude){
+    // claude.ai's own shared database already covers this inside the artifact --
+    // Supabase is the standalone (e.g. GitHub Pages) equivalent, so only offer it there.
+    var supaItem = item(supaClient ? "Supabase settings…" : "Connect to Supabase…");
+    supaItem.addEventListener("click", function(){ menu.remove(); openSupabaseSetup(); });
+    menu.appendChild(supaItem);
+  }
+  document.body.appendChild(menu);
+  setTimeout(function(){
+    document.addEventListener("click", function h(e){
+      if(!menu.contains(e.target) && e.target !== btn){ menu.remove(); document.removeEventListener("click", h); }
+    });
+  },0);
+}
+
+/* ================= View switching / zoom ================= */
+function setView(v){
+  currentView = v;
+  document.getElementById("tabTree").setAttribute("aria-pressed", v==="tree");
+  document.getElementById("tabList").setAttribute("aria-pressed", v==="list");
+  document.getElementById("treeScroll").style.display = v==="tree" ? "block" : "none";
+  document.querySelector(".zoomctl").style.display = v==="tree" ? "flex" : "none";
+  document.getElementById("listView").style.display = v==="list" ? "block" : "none";
+  if(v==="list") renderList();
+}
+function setZoom(z){
+  zoom = Math.max(0.4, Math.min(1.6, z));
+  var canvas = document.getElementById("treeCanvas");
+  canvas.style.transform = "scale(" + zoom + ")";
+  canvas.style.transformOrigin = "0 0";
+  document.getElementById("zoomReset").textContent = Math.round(zoom*100) + "%";
+}
+
+/* ================= Wire up ================= */
+function renderAll(){
+  document.getElementById("peopleCount").textContent = Object.keys(people).length
+    ? Object.keys(people).length + (Object.keys(people).length===1 ? " person" : " people")
+    : "";
+  document.getElementById("exampleBanner").hidden = !isExample || Object.keys(people).length===0;
+  refreshNameOptions();
+  renderTree();
+  if(currentView==="list") renderList();
+}
+
+document.getElementById("tabTree").addEventListener("click", function(){ setView("tree"); });
+document.getElementById("tabList").addEventListener("click", function(){ setView("list"); });
+document.getElementById("addPersonBtn").addEventListener("click", function(){ pendingRelAction=null; openEdit(null, {id:uid(),firstName:"",lastName:"",maidenName:"",birthYear:"",deathYear:"",details:"",notes:"",photo:"",partnerId:"",parentIds:[]}); });
+document.getElementById("emptyAddBtn").addEventListener("click", function(){ document.getElementById("addPersonBtn").click(); });
+document.getElementById("startOwnBtn").addEventListener("click", function(){
+  pendingDbDeletes = pendingDbDeletes.concat(Object.keys(people));
+  people = {};
+  isExample = false;
+  saveState();
+  renderAll();
+  toast("Cleared. Add your first person to begin.");
+});
+document.getElementById("moreBtn").addEventListener("click", toggleMoreMenu);
+document.getElementById("adminBtn").addEventListener("click", function(){
+  if(adminUnlocked){
+    adminUnlocked = false;
+    try{ sessionStorage.removeItem("ftAdmin"); }catch(e){}
+    updateAdminButton();
+    toast("Admin mode locked.");
+  } else {
+    openAdminLogin();
+  }
+});
+document.getElementById("traceBtn").addEventListener("click", function(){
+  var panel = document.getElementById("tracePanel");
+  panel.hidden = !panel.hidden;
+  if(!panel.hidden) document.getElementById("traceA").focus();
+});
+document.getElementById("traceFindBtn").addEventListener("click", function(){
+  var aId = resolvePersonByText(document.getElementById("traceA").value);
+  var bId = resolvePersonByText(document.getElementById("traceB").value);
+  var resultEl = document.getElementById("traceResult");
+  if(!aId || !bId){
+    toast("Couldn't match one or both names — pick from the suggestions as you type.");
+    return;
+  }
+  var path = findPath(aId, bId);
+  if(!path){
+    highlightPath = null;
+    resultEl.hidden = false;
+    resultEl.textContent = "No connection found between them in this tree.";
+    renderTree();
+    return;
+  }
+  highlightPath = path;
+  resultEl.hidden = false;
+  resultEl.textContent = describePath(path);
+  renderTree();
+});
+document.getElementById("traceClearBtn").addEventListener("click", function(){
+  highlightPath = null;
+  document.getElementById("traceA").value = "";
+  document.getElementById("traceB").value = "";
+  document.getElementById("traceResult").hidden = true;
+  renderTree();
+});
+document.getElementById("searchInput").addEventListener("input", function(){
+  if(currentView === "list") renderList();
+});
+document.getElementById("zoomIn").addEventListener("click", function(){ setZoom(zoom + 0.1); });
+document.getElementById("zoomOut").addEventListener("click", function(){ setZoom(zoom - 0.1); });
+document.getElementById("zoomReset").addEventListener("click", function(){ setZoom(1); });
+
+loadState();
+try{ adminUnlocked = sessionStorage.getItem("ftAdmin") === "1"; }catch(e){ adminUnlocked = false; }
+updateAdminButton();
+updateSyncStatus("💻 Saved locally only (this browser)");
+setView("tree");
+renderAll();
+initCapabilities();
+
+})();
+</script>
+
+</body>
+</html>
