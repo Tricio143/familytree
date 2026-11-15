@@ -5,7 +5,6 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="claude:viewport-fit-sides" content="cover">
 <title>Family Tree Builder</title>
-<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&display=swap">
 <style>
   /* Layout concept: generation rows run top to bottom; couples sit side by
      side within a row; an SVG layer behind the cards draws marriage lines
@@ -262,12 +261,13 @@
   #importOverlay .field textarea{min-height:140px; font-family:ui-monospace,monospace; font-size:11.5px;}
   [hidden]{display:none!important;}
 </style>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&display=swap">
 </head>
 <body>
+
+
+
 <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-
-
-
 
 <div class="topbar">
   <div class="brand">
@@ -412,6 +412,10 @@ function seedData(){
 // through the artifact's own built-in shared database and this block is ignored.
 var SUPABASE_URL = "https://ddhpsxnyaqyupyvasgpd.supabase.co";
 var SUPABASE_ANON_KEY = "sb_publishable_9UgprON-NfXbgg6_zs5rZw_E1bGEq2G";
+// Name of the Supabase Storage bucket photos are uploaded to (see README for the
+// one-time setup). Only used when connected to Supabase -- inside the Claude
+// artifact, photos stay embedded directly in the shared database as before.
+var PHOTO_BUCKET = "family-tree-photos";
 
 var people = {};
 var isExample = false;
@@ -1627,23 +1631,43 @@ function openEdit(id, draft){
   overlay.querySelector("#cancelBtn").addEventListener("click", close);
   overlay.addEventListener("click", function(e){ if(e.target === overlay) close(); });
 
+  var photoUploadInFlight = false;
   overlay.querySelector("#photoInput").addEventListener("change", function(e){
     var file = e.target.files[0];
     if(!file) return;
     resizeImage(file, 220, 0.85).then(function(dataUrl){
-      pendingPhoto = dataUrl;
       var prev = document.getElementById("modalAvatarPreview");
+      // Show the resized photo immediately (optimistic), then swap in the
+      // Storage URL once the upload finishes, if we're connected to Supabase.
+      pendingPhoto = dataUrl;
       prev.style.backgroundImage = "url('" + dataUrl + "')";
       prev.textContent = "";
       prev.style.background = "";
       prev.style.backgroundImage = "url('" + dataUrl + "')";
       prev.style.backgroundSize = "cover";
       prev.style.backgroundPosition = "center";
+      if(supaClient){
+        photoUploadInFlight = true;
+        var uploadingTag = document.createElement("div");
+        uploadingTag.className = "muted";
+        uploadingTag.style.fontSize = "11px";
+        uploadingTag.style.marginTop = "4px";
+        uploadingTag.textContent = "Uploading…";
+        prev.parentNode.insertBefore(uploadingTag, prev.nextSibling);
+        uploadPhotoToStorage(dataUrl, person.id).then(function(url){
+          photoUploadInFlight = false;
+          uploadingTag.remove();
+          // Only adopt the uploaded URL if the user hasn't since removed the photo
+          // or picked a different file while this upload was in flight.
+          if(pendingPhoto === dataUrl) pendingPhoto = url;
+        });
+      }
     }).catch(function(){ toast("Could not read that image."); });
   });
   var removeBtn = overlay.querySelector("#removePhoto");
   if(removeBtn){
     removeBtn.addEventListener("click", function(){
+      if(isOwnStorageUrl(pendingPhoto)) deletePhotoFromStorage(pendingPhoto);
       pendingPhoto = "";
       var prev = document.getElementById("modalAvatarPreview");
       prev.style.backgroundImage = "";
@@ -1718,6 +1742,7 @@ function openEdit(id, draft){
     var firstName = overlay.querySelector("#fFirst").value.trim();
     var lastName = overlay.querySelector("#fLast").value.trim();
     if(!firstName && !lastName){ toast("Give this person at least a name."); return; }
+    if(photoUploadInFlight){ toast("Still uploading the photo — one moment."); return; }
 
     if(isNew && linkedExistingId){
       var linkedName = fullName(people[linkedExistingId]);
@@ -1736,7 +1761,9 @@ function openEdit(id, draft){
     person.deathYear = overlay.querySelector("#fDeath").value.trim();
     person.details = overlay.querySelector("#fDetails").value.trim();
     person.notes = overlay.querySelector("#fNotes").value.trim();
+    var oldPhoto = person.photo;
     person.photo = pendingPhoto;
+    if(oldPhoto && oldPhoto !== pendingPhoto && isOwnStorageUrl(oldPhoto)) deletePhotoFromStorage(oldPhoto);
 
     people[person.id] = person;
 
@@ -1910,6 +1937,7 @@ function openAdminLogin(){
 function deletePerson(id){
   var person = people[id];
   if(!person) return;
+  if(person.photo && isOwnStorageUrl(person.photo)) deletePhotoFromStorage(person.photo);
   if(person.partnerId && people[person.partnerId]){
     people[person.partnerId].partnerId = "";
   }
@@ -1951,6 +1979,60 @@ function resizeImage(file, maxSize, quality){
     reader.onerror = reject;
     reader.readAsDataURL(file);
   });
+}
+
+/* ================= Photo storage (Supabase Storage bucket) ================= */
+// When connected to Supabase, photos are uploaded to a Storage bucket instead of
+// being embedded as base64 in the database row (base64 counts heavily against the
+// much smaller database-storage quota). Inside the Claude artifact, or whenever
+// Supabase isn't connected, photos just stay as base64 data URLs like before --
+// uploadPhotoToStorage() below falls back to that automatically.
+
+function dataUrlToBlob(dataUrl){
+  var parts = dataUrl.split(",");
+  var mime = (parts[0].match(/data:([^;]+)/) || [null,"image/jpeg"])[1];
+  var binary = atob(parts[1]);
+  var bytes = new Uint8Array(binary.length);
+  for(var i=0; i<binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  return new Blob([bytes], { type: mime });
+}
+
+// True only for a public URL this app itself generated from PHOTO_BUCKET -- used so
+// we never try to "clean up" something that was never ours (e.g. a base64 data URL,
+// or a photo the Claude-artifact/db path stored some other way).
+function isOwnStorageUrl(url){
+  if(!url || !SUPABASE_URL) return false;
+  var prefix = SUPABASE_URL.replace(/\/$/, "") + "/storage/v1/object/public/" + PHOTO_BUCKET + "/";
+  return url.indexOf(prefix) === 0;
+}
+
+// Uploads a resized-photo data URL to Supabase Storage and resolves with the public
+// URL to store on the person instead. If Supabase isn't connected, or the upload
+// fails for any reason, resolves with the original data URL unchanged so the photo
+// still saves (just embedded, as before) rather than being lost.
+function uploadPhotoToStorage(dataUrl, personId){
+  if(!supaClient) return Promise.resolve(dataUrl);
+  var blob;
+  try{ blob = dataUrlToBlob(dataUrl); }
+  catch(e){ return Promise.resolve(dataUrl); }
+  var path = personId + "/" + Date.now() + ".jpg";
+  return supaClient.storage.from(PHOTO_BUCKET).upload(path, blob, { contentType: "image/jpeg", upsert: true })
+    .then(function(res){
+      if(res && res.error) return dataUrl;
+      var pub = supaClient.storage.from(PHOTO_BUCKET).getPublicUrl(path);
+      var url = pub && pub.data && pub.data.publicUrl;
+      return url || dataUrl;
+    }, function(){ return dataUrl; });
+}
+
+// Best-effort delete of a photo's storage object (when replacing or removing a
+// photo, or deleting the person). Never blocks the UI and never reports failure --
+// an orphaned file in the bucket costs a little space, not correctness.
+function deletePhotoFromStorage(url){
+  if(!supaClient || !isOwnStorageUrl(url)) return;
+  var prefix = SUPABASE_URL.replace(/\/$/, "") + "/storage/v1/object/public/" + PHOTO_BUCKET + "/";
+  var path = url.slice(prefix.length);
+  supaClient.storage.from(PHOTO_BUCKET).remove([path]).catch(function(){});
 }
 
 /* ================= Import / Export (clipboard-based; downloads are blocked) ================= */
@@ -2202,6 +2284,7 @@ initCapabilities();
 
 })();
 </script>
+
 
 </body>
 </html>
