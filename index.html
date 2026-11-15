@@ -367,9 +367,6 @@ var BRANCH_COLORS_FALLBACK = [
 // ordinary users, but it is not a real access-control boundary.
 var ADMIN_USER = "Tricio";
 var ADMIN_PASS = "Hulaanmo";
-var LS_KEY = "familyTreeData.v1";
-var LS_EXAMPLE_KEY = "familyTreeIsExample.v1";
-var LS_PENDING_DELETES_KEY = "familyTreePendingDeletes.v1";
 
 /* ================= Seed / example data ================= */
 function seedData(){
@@ -408,8 +405,9 @@ function seedData(){
 // tree syncs for EVERY visitor automatically, with nothing for them to configure. Get both
 // values from your Supabase project's Settings -> API page; see the README for the exact
 // SQL to run once, in the Supabase SQL editor, to create the two required tables.
-// Leave both blank to let each visitor connect their own Supabase project instead, from the
-// "Connect to Supabase..." item in the "..." menu (saved to their own browser only).
+// These are the ONLY place Supabase credentials live -- there is no per-visitor override and
+// no browser storage of any kind involved, by design: every visitor reads and writes the
+// exact same Supabase project, and nothing about the tree is ever cached locally.
 // This only applies outside the Claude artifact -- inside claude.ai, the tree already syncs
 // through the artifact's own built-in shared database and this block is ignored.
 var SUPABASE_URL = "https://ddhpsxnyaqyupyvasgpd.supabase.co";
@@ -417,6 +415,7 @@ var SUPABASE_ANON_KEY = "sb_publishable_9UgprON-NfXbgg6_zs5rZw_E1bGEq2G";
 
 var people = {};
 var isExample = false;
+var showingLocalPlaceholder = false; // true only while the never-saved example tree is on screen pre-connect
 var dbApi = null;           // claude.ai artifact's built-in shared database (inside claude.ai only)
 var supaClient = null;      // Supabase client (outside claude.ai, or if explicitly configured)
 var downloadsApi = null;
@@ -433,35 +432,16 @@ var adminUnlocked = false;
 
 function uid(){ return "p" + Math.random().toString(36).slice(2,9); }
 
+// No browser storage holds any tree data -- people/isExample live ONLY in memory here plus
+// whichever shared backend is connected (Supabase, or claude.ai's db capability). A fresh
+// load always starts from nothing and waits for that backend's own fetch to populate it --
+// never a locally-cached copy -- so there is exactly one place this data is ever "saved to".
 function loadState(){
-  try{
-    var rawDeletes = localStorage.getItem(LS_PENDING_DELETES_KEY);
-    if(rawDeletes) pendingDbDeletes = JSON.parse(rawDeletes) || [];
-  }catch(e){ pendingDbDeletes = []; }
-  try{
-    var raw = localStorage.getItem(LS_KEY);
-    if(raw){
-      people = JSON.parse(raw);
-      isExample = localStorage.getItem(LS_EXAMPLE_KEY) === "1";
-      return;
-    }
-  }catch(e){}
-  people = seedData();
-  isExample = true;
+  people = {};
+  isExample = false; showingLocalPlaceholder = false;
 }
 function saveState(){
-  try{
-    localStorage.setItem(LS_KEY, JSON.stringify(people));
-    localStorage.setItem(LS_EXAMPLE_KEY, isExample ? "1" : "0");
-  }catch(e){ /* storage unavailable or full: continue without persistence */ }
   syncToDb();
-}
-// Pending deletes are persisted to localStorage immediately, separately from the main
-// save, so a delete that's still in flight (or that silently failed) when the tab closes
-// or reconnects isn't lost -- it gets retried the next time syncToDb runs, instead of the
-// shared backend quietly keeping a "ghost" row that comes back to haunt the next reload.
-function persistPendingDeletes(){
-  try{ localStorage.setItem(LS_PENDING_DELETES_KEY, JSON.stringify(pendingDbDeletes)); }catch(e){}
 }
 
 /* ================= Shared backup (claude.ai db capability, or Supabase) ================= */
@@ -473,22 +453,42 @@ function persistPendingDeletes(){
 // locally while the connection was still being made).
 var lastSyncedJson = {};
 var lastSyncedIsExample = null;
+// Ids with a delete still in flight (including mid-retry) -- nothing persists this (no local
+// storage), but it only needs to survive long enough to stop an incoming fetch/snapshot from
+// resurrecting a person while their delete is still being retried against the server; see
+// applyIncomingPeopleChange below.
+var deletesInFlight = {};
 function updateSyncStatus(text){
   var el = document.getElementById("syncStatus");
   if(el) el.textContent = text;
 }
+// Retries a failed delete a few times with backoff before giving up and telling the user --
+// entirely in memory, nothing written to any local storage. This is the one place the app
+// still tries to paper over a brief connection blip, since without it a single transient
+// failure would otherwise leave the row stranded on the server, to be pulled back down and
+// "un-deleted" on the next fetch.
+function deleteFromBackend(id, attempt){
+  attempt = attempt || 1;
+  deletesInFlight[id] = true;
+  var call = dbApi
+    ? dbApi.collection("people").doc(id).delete().then(function(){ return true; }, function(){ return false; })
+    : supaClient.from("family_tree_people").delete().eq("id", id).then(function(res){ return !(res && res.error); }, function(){ return false; });
+  call.then(function(ok){
+    if(ok){ delete deletesInFlight[id]; return; }
+    if(attempt < 4){
+      setTimeout(function(){ deleteFromBackend(id, attempt + 1); }, attempt * 700);
+    } else {
+      delete deletesInFlight[id];
+      toast("Couldn't confirm that delete reached the shared database — please delete them again.");
+    }
+  });
+}
 function syncToDb(){
-  if(!dbApi && !supaClient){ return; } // nothing connected yet -- leave pendingDbDeletes queued for whenever it is
+  if(!dbApi && !supaClient) return; // nothing connected yet -- nowhere to save to right now
   var toDelete = pendingDbDeletes.slice();
   pendingDbDeletes = [];
-  persistPendingDeletes();
-  // If a delete call fails (offline blip, RLS hiccup, etc.) the id goes right back onto the
-  // queue -- and gets persisted -- instead of silently vanishing, which is what let a deleted
-  // person's row survive server-side and get pulled back down (un-deleted) on the next load.
-  function retryDelete(id){
-    pendingDbDeletes.push(id);
-    persistPendingDeletes();
-  }
+  toDelete.forEach(function(id){ deleteFromBackend(id); });
+
   var changedIds = [];
   Object.keys(people).forEach(function(id){
     var json = JSON.stringify(people[id]);
@@ -498,7 +498,6 @@ function syncToDb(){
   if(exampleChanged) lastSyncedIsExample = isExample;
 
   if(dbApi){
-    toDelete.forEach(function(id){ dbApi.collection("people").doc(id).delete().catch(function(){ retryDelete(id); }); });
     changedIds.forEach(function(id){
       dbApi.collection("people").doc(id).set(people[id]).catch(function(){ delete lastSyncedJson[id]; });
     });
@@ -507,11 +506,6 @@ function syncToDb(){
     }
   }
   if(supaClient){
-    toDelete.forEach(function(id){
-      supaClient.from("family_tree_people").delete().eq("id", id).then(function(res){
-        if(res && res.error) retryDelete(id);
-      }, function(){ retryDelete(id); });
-    });
     changedIds.forEach(function(id){
       supaClient.from("family_tree_people").upsert({ id: id, data: people[id] }).then(function(res){
         if(res && res.error) delete lastSyncedJson[id];
@@ -525,10 +519,10 @@ function syncToDb(){
   }
 }
 function applyIncomingPeopleChange(id, data, removed){
-  if(!removed && pendingDbDeletes.indexOf(id) !== -1){
-    // We've already deleted this person locally and are still waiting for that delete to
-    // reach (or retry against) the server -- an incoming fetch/snapshot for this id just
-    // means the server hasn't caught up yet, so ignore it rather than resurrecting them.
+  if(!removed && deletesInFlight[id]){
+    // We've already deleted this person locally and are still retrying against the server --
+    // an incoming fetch/snapshot for this id just means the server hasn't caught up yet, so
+    // ignore it rather than resurrecting them.
     return;
   }
   if(removed){
@@ -542,7 +536,7 @@ function applyIncomingPeopleChange(id, data, removed){
 function subscribeDb(){
   updateSyncStatus("☁ Connecting…");
   var loadTimer = setTimeout(function(){
-    toast("Still connecting to the shared backup — showing your local copy for now.");
+    toast("Still connecting to the shared database…");
   }, 10000);
   dbApi.doc("meta/info").onSnapshot(function(snap){
     if(snap.exists){
@@ -554,28 +548,40 @@ function subscribeDb(){
   dbApi.collection("people").onSnapshot(function(snap){
     clearTimeout(loadTimer);
     updateSyncStatus("☁ Synced online (shared via Claude)");
+    if(showingLocalPlaceholder){
+      // Replace the never-saved example placeholder with whatever's actually in the shared
+      // database (even if that's nothing) now that we finally know -- safe to wipe here,
+      // unlike elsewhere, because nothing has been edited yet while it was just a placeholder.
+      people = {};
+      showingLocalPlaceholder = false;
+    }
     snap.docChanges().forEach(function(ch){
       applyIncomingPeopleChange(ch.doc.id, ch.type === "removed" ? null : ch.doc.data(), ch.type === "removed");
     });
-    try{ localStorage.setItem(LS_KEY, JSON.stringify(people)); }catch(e){}
     renderAll();
     if(!firstSnapshotDone){
       firstSnapshotDone = true;
-      syncToDb(); // push anything that was added locally before the shared backup was ready
+      if(Object.keys(people).length === 0 && isExample){
+        // The shared tree is genuinely empty -- show the demo again as a never-saved
+        // placeholder (exactly like the very first load) rather than a confusing empty
+        // canvas with an "example" banner and nothing in it.
+        people = seedData();
+        showingLocalPlaceholder = true;
+        renderAll();
+      }
+      // Only push up anything added locally before the connection was ready -- never push the
+      // in-memory example/demo tree, since that's shown purely for show-and-tell and was never
+      // meant to actually land in the shared database.
+      if(!isExample) syncToDb();
     }
   }, function(){
     clearTimeout(loadTimer);
-    updateSyncStatus("💻 Saved locally only (this browser)");
-    toast("Couldn't reach the shared backup — working from your local copy.");
+    updateSyncStatus("⚠ Not connected — nothing is being saved");
+    toast("Couldn't reach the shared database. Changes won't be saved until it's reachable again.");
   });
 }
 function getSupabaseConfig(){
-  var url = "", key = "";
-  try{
-    url = localStorage.getItem("familyTreeSupabaseUrl") || SUPABASE_URL || "";
-    key = localStorage.getItem("familyTreeSupabaseKey") || SUPABASE_ANON_KEY || "";
-  }catch(e){ url = SUPABASE_URL || ""; key = SUPABASE_ANON_KEY || ""; }
-  return { url: url.trim(), key: key.trim() };
+  return { url: (SUPABASE_URL||"").trim(), key: (SUPABASE_ANON_KEY||"").trim() };
 }
 function loadSupabaseScript(){
   return new Promise(function(resolve, reject){
@@ -596,12 +602,16 @@ function loadSupabaseScript(){
 }
 function initSupabase(){
   var cfg = getSupabaseConfig();
-  if(!cfg.url || !cfg.key){ updateSyncStatus("💻 Saved locally only (this browser)"); return; }
+  if(!cfg.url || !cfg.key){
+    updateSyncStatus("⚠ Not connected to Supabase — nothing will be saved");
+    toast("No Supabase project is configured in this copy — nothing can be saved right now.");
+    return;
+  }
   updateSyncStatus("☁ Connecting…");
   loadSupabaseScript().then(function(){
     doInitSupabase(cfg);
   }).catch(function(){
-    updateSyncStatus("💻 Saved locally only (this browser)");
+    updateSyncStatus("⚠ Not connected — nothing is being saved");
     toast("Couldn't load the Supabase library — check your connection and reload.");
   });
 }
@@ -610,30 +620,44 @@ function doInitSupabase(cfg){
     supaClient = window.supabase.createClient(cfg.url, cfg.key);
   }catch(e){
     supaClient = null;
-    updateSyncStatus("💻 Saved locally only (this browser)");
+    updateSyncStatus("⚠ Not connected — nothing is being saved");
     toast("That Supabase URL/key didn't work.");
     return;
   }
   var loadTimer = setTimeout(function(){
-    toast("Still connecting to Supabase — showing your local copy for now.");
+    toast("Still connecting to Supabase…");
   }, 10000);
   supaClient.from("family_tree_people").select("*").then(function(res){
     clearTimeout(loadTimer);
     if(res.error){
-      updateSyncStatus("💻 Saved locally only (this browser)");
+      updateSyncStatus("⚠ Not connected — nothing is being saved");
       toast("Couldn't reach Supabase: " + res.error.message);
       return;
     }
-    // Merge onto whatever is already here (never wipe first -- see note above);
-    // anything local-only gets pushed up to Supabase right after via syncToDb().
+    if(showingLocalPlaceholder){
+      // Replace the never-saved example placeholder with whatever's actually in Supabase (even
+      // if that's nothing) now that we finally know -- safe to wipe here, unlike elsewhere,
+      // because nothing has been edited yet while it was just a placeholder.
+      people = {};
+      showingLocalPlaceholder = false;
+    }
+    // Merge onto whatever is already here (never wipe first otherwise -- see note above);
+    // anything added before the connection was ready gets pushed up right after via syncToDb().
     (res.data || []).forEach(function(row){ applyIncomingPeopleChange(row.id, row.data, false); });
     supaClient.from("family_tree_meta").select("*").eq("id", "info").then(function(mres){
       if(!mres.error && mres.data && mres.data[0]){
         isExample = !!(mres.data[0].data || {}).isExample;
       }
+      if(Object.keys(people).length === 0 && isExample){
+        // The shared tree is genuinely empty -- show the demo again as a never-saved
+        // placeholder (exactly like the very first load) rather than a confusing empty
+        // canvas with an "example" banner and nothing in it.
+        people = seedData();
+        showingLocalPlaceholder = true;
+      }
       updateSyncStatus("☁ Synced online (shared via Supabase)");
       renderAll();
-      syncToDb();
+      if(!isExample) syncToDb();
     });
     supaClient
       .channel("family-tree-sync")
@@ -641,7 +665,6 @@ function doInitSupabase(cfg){
         var removed = payload.eventType === "DELETE";
         var row = removed ? payload.old : payload.new;
         applyIncomingPeopleChange(row.id, removed ? null : row.data, removed);
-        try{ localStorage.setItem(LS_KEY, JSON.stringify(people)); }catch(e){}
         renderAll();
       })
       .on("postgres_changes", { event: "*", schema: "public", table: "family_tree_meta" }, function(payload){
@@ -653,8 +676,8 @@ function doInitSupabase(cfg){
       .subscribe();
   }, function(){
     clearTimeout(loadTimer);
-    updateSyncStatus("💻 Saved locally only (this browser)");
-    toast("Couldn't reach Supabase — working from your local copy.");
+    updateSyncStatus("⚠ Not connected — nothing is being saved");
+    toast("Couldn't reach Supabase.");
   });
 }
 function initCapabilities(){
@@ -666,8 +689,7 @@ function initCapabilities(){
     window.claude.use("downloads").then(function(d){ downloadsApi = d; });
   } else {
     // Standalone (e.g. hosted on GitHub Pages) -- claude.ai's database isn't reachable here,
-    // so fall back to Supabase if it's configured (hardcoded above, or saved by a visitor
-    // from the "Connect to Supabase..." menu item).
+    // so connect to the Supabase project hardcoded above instead.
     initSupabase();
   }
 }
@@ -721,63 +743,6 @@ function exportExcel(){
     if(err && err.code === "declined") return;
     toast("Couldn't save the Excel file.");
   });
-}
-
-function openSupabaseSetup(){
-  var cfg = getSupabaseConfig();
-  var overlay = document.createElement("div");
-  overlay.className = "overlay";
-  overlay.innerHTML =
-    '<div class="modal">' +
-      '<div class="modal-head"><h2>Connect to Supabase</h2>' +
-        '<button class="modal-close" id="supaClose" aria-label="Close">' +
-          '<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>' +
-        '</button>' +
-      '</div>' +
-      '<div class="modal-body">' +
-        '<p class="muted" style="font-size:12.5px;line-height:1.5;margin:0 0 12px;">' +
-          'Paste the Project URL and anon public API key from your Supabase project\'s ' +
-          '<strong>Settings → API</strong> page. Create the two required tables first — see the ' +
-          'README for the exact SQL to run once in the Supabase SQL editor. Saved to this browser only; ' +
-          'to connect everyone automatically, put these in the <code>SUPABASE_URL</code> / ' +
-          '<code>SUPABASE_ANON_KEY</code> constants near the top of index.html instead.' +
-        '</p>' +
-        '<div class="field"><label>Project URL</label><input id="supaUrl" placeholder="https://xxxxx.supabase.co" value="'+escapeHtml(cfg.url)+'"></div>' +
-        '<div class="field"><label>Anon public API key</label><input id="supaKey" placeholder="eyJ..." value="'+escapeHtml(cfg.key)+'"></div>' +
-      '</div>' +
-      '<div class="modal-foot">' +
-        '<button class="btn primary" id="supaSave">Save & connect</button>' +
-        (cfg.url || cfg.key ? '<button class="btn ghost" id="supaDisconnect">Disconnect</button>' : '') +
-        '<button class="btn ghost" id="supaCancel">Cancel</button>' +
-      '</div>' +
-    '</div>';
-  document.body.appendChild(overlay);
-  function close(){ overlay.remove(); }
-  overlay.querySelector("#supaClose").addEventListener("click", close);
-  overlay.querySelector("#supaCancel").addEventListener("click", close);
-  overlay.addEventListener("click", function(e){ if(e.target === overlay) close(); });
-  overlay.querySelector("#supaSave").addEventListener("click", function(){
-    var url = overlay.querySelector("#supaUrl").value.trim();
-    var key = overlay.querySelector("#supaKey").value.trim();
-    if(!url || !key){ toast("Enter both the project URL and the anon key."); return; }
-    try{
-      localStorage.setItem("familyTreeSupabaseUrl", url);
-      localStorage.setItem("familyTreeSupabaseKey", key);
-    }catch(e){}
-    toast("Saved — reloading to connect…");
-    setTimeout(function(){ location.reload(); }, 500);
-  });
-  var disBtn = overlay.querySelector("#supaDisconnect");
-  if(disBtn){
-    disBtn.addEventListener("click", function(){
-      try{
-        localStorage.removeItem("familyTreeSupabaseUrl");
-        localStorage.removeItem("familyTreeSupabaseKey");
-      }catch(e){}
-      toast("Disconnected — reloading…");
-      setTimeout(function(){ location.reload(); }, 500);
-    });
-  }
 }
 
 /* ================= Helpers ================= */
@@ -1424,7 +1389,7 @@ function placeCard(canvas, person, x, y){
     var dy = (e.clientY - startY) / zoom;
     var prev = person.posOffset || { dx:0, dy:0 };
     person.posOffset = { dx: prev.dx + dx, dy: prev.dy + dy };
-    isExample = false;
+    isExample = false; showingLocalPlaceholder = false;
     saveState();
     suppressNextClick = true;
     renderTree();
@@ -1785,7 +1750,7 @@ function openEdit(id, draft){
       applyPendingRelationship(person.id);
     }
     pendingRelAction = null;
-    isExample = false;
+    isExample = false; showingLocalPlaceholder = false;
     saveState();
     close();
     renderAll();
@@ -1870,7 +1835,7 @@ function applyPendingRelationshipToExisting(existingId){
     }
     anchor.parentIds = curAnchorParents.concat([existingId]);
   }
-  isExample = false;
+  isExample = false; showingLocalPlaceholder = false;
   saveState();
   return true;
 }
@@ -1956,8 +1921,7 @@ function deletePerson(id){
   });
   delete people[id];
   pendingDbDeletes.push(id);
-  persistPendingDeletes();
-  isExample = false;
+  isExample = false; showingLocalPlaceholder = false;
   saveState();
   renderAll();
   toast("Removed from the tree.");
@@ -2029,9 +1993,8 @@ function showImportExportFallback(prefill){
         var newPeople = parsed.people || parsed;
         if(!newPeople || typeof newPeople !== "object") throw new Error("bad shape");
         pendingDbDeletes = pendingDbDeletes.concat(Object.keys(people));
-        persistPendingDeletes();
         people = newPeople;
-        isExample = false;
+        isExample = false; showingLocalPlaceholder = false;
         saveState();
         renderAll();
         overlay.remove();
@@ -2050,9 +2013,8 @@ function importJSON(){
         var newPeople = parsed.people || parsed;
         if(!newPeople || typeof newPeople !== "object") throw new Error("bad");
         pendingDbDeletes = pendingDbDeletes.concat(Object.keys(people));
-        persistPendingDeletes();
         people = newPeople;
-        isExample = false;
+        isExample = false; showingLocalPlaceholder = false;
         saveState();
         renderAll();
         toast("Tree imported from clipboard.");
@@ -2110,13 +2072,6 @@ function toggleMoreMenu(){
   menu.appendChild(copyItem);
   menu.appendChild(importItem);
   menu.appendChild(excelItem);
-  if(!window.claude){
-    // claude.ai's own shared database already covers this inside the artifact --
-    // Supabase is the standalone (e.g. GitHub Pages) equivalent, so only offer it there.
-    var supaItem = item(supaClient ? "Supabase settings…" : "Connect to Supabase…");
-    supaItem.addEventListener("click", function(){ menu.remove(); openSupabaseSetup(); });
-    menu.appendChild(supaItem);
-  }
   document.body.appendChild(menu);
   setTimeout(function(){
     document.addEventListener("click", function h(e){
@@ -2172,9 +2127,8 @@ document.getElementById("addPersonBtn").addEventListener("click", function(){ pe
 document.getElementById("emptyAddBtn").addEventListener("click", function(){ document.getElementById("addPersonBtn").click(); });
 document.getElementById("startOwnBtn").addEventListener("click", function(){
   pendingDbDeletes = pendingDbDeletes.concat(Object.keys(people));
-  persistPendingDeletes();
   people = {};
-  isExample = false;
+  isExample = false; showingLocalPlaceholder = false;
   saveState();
   renderAll();
   toast("Cleared. Add your first person to begin.");
@@ -2232,9 +2186,15 @@ document.getElementById("zoomReset").addEventListener("click", function(){ setZo
 document.getElementById("centerTree").addEventListener("click", function(){ centerTreeView(true); });
 
 loadState();
+// Show the example tree as a placeholder while the shared database connects -- it lives only
+// in memory and is replaced the moment real data (or an empty table) comes back; it is never
+// written anywhere on its own.
+people = seedData();
+isExample = true;
+showingLocalPlaceholder = true;
 try{ adminUnlocked = sessionStorage.getItem("ftAdmin") === "1"; }catch(e){ adminUnlocked = false; }
 updateAdminButton();
-updateSyncStatus("💻 Saved locally only (this browser)");
+updateSyncStatus("☁ Connecting…");
 setView("tree");
 renderAll();
 centerTreeView(false);
