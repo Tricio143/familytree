@@ -369,6 +369,7 @@ var ADMIN_USER = "Tricio";
 var ADMIN_PASS = "Hulaanmo";
 var LS_KEY = "familyTreeData.v1";
 var LS_EXAMPLE_KEY = "familyTreeIsExample.v1";
+var LS_PENDING_DELETES_KEY = "familyTreePendingDeletes.v1";
 
 /* ================= Seed / example data ================= */
 function seedData(){
@@ -434,6 +435,10 @@ function uid(){ return "p" + Math.random().toString(36).slice(2,9); }
 
 function loadState(){
   try{
+    var rawDeletes = localStorage.getItem(LS_PENDING_DELETES_KEY);
+    if(rawDeletes) pendingDbDeletes = JSON.parse(rawDeletes) || [];
+  }catch(e){ pendingDbDeletes = []; }
+  try{
     var raw = localStorage.getItem(LS_KEY);
     if(raw){
       people = JSON.parse(raw);
@@ -451,6 +456,13 @@ function saveState(){
   }catch(e){ /* storage unavailable or full: continue without persistence */ }
   syncToDb();
 }
+// Pending deletes are persisted to localStorage immediately, separately from the main
+// save, so a delete that's still in flight (or that silently failed) when the tab closes
+// or reconnects isn't lost -- it gets retried the next time syncToDb runs, instead of the
+// shared backend quietly keeping a "ghost" row that comes back to haunt the next reload.
+function persistPendingDeletes(){
+  try{ localStorage.setItem(LS_PENDING_DELETES_KEY, JSON.stringify(pendingDbDeletes)); }catch(e){}
+}
 
 /* ================= Shared backup (claude.ai db capability, or Supabase) ================= */
 // Both backends share the same dedupe/delete-queue bookkeeping and the same two lessons
@@ -466,9 +478,17 @@ function updateSyncStatus(text){
   if(el) el.textContent = text;
 }
 function syncToDb(){
-  if(!dbApi && !supaClient) return;
+  if(!dbApi && !supaClient){ return; } // nothing connected yet -- leave pendingDbDeletes queued for whenever it is
   var toDelete = pendingDbDeletes.slice();
   pendingDbDeletes = [];
+  persistPendingDeletes();
+  // If a delete call fails (offline blip, RLS hiccup, etc.) the id goes right back onto the
+  // queue -- and gets persisted -- instead of silently vanishing, which is what let a deleted
+  // person's row survive server-side and get pulled back down (un-deleted) on the next load.
+  function retryDelete(id){
+    pendingDbDeletes.push(id);
+    persistPendingDeletes();
+  }
   var changedIds = [];
   Object.keys(people).forEach(function(id){
     var json = JSON.stringify(people[id]);
@@ -478,7 +498,7 @@ function syncToDb(){
   if(exampleChanged) lastSyncedIsExample = isExample;
 
   if(dbApi){
-    toDelete.forEach(function(id){ dbApi.collection("people").doc(id).delete().catch(function(){}); });
+    toDelete.forEach(function(id){ dbApi.collection("people").doc(id).delete().catch(function(){ retryDelete(id); }); });
     changedIds.forEach(function(id){
       dbApi.collection("people").doc(id).set(people[id]).catch(function(){ delete lastSyncedJson[id]; });
     });
@@ -488,7 +508,9 @@ function syncToDb(){
   }
   if(supaClient){
     toDelete.forEach(function(id){
-      supaClient.from("family_tree_people").delete().eq("id", id).then(function(){}, function(){});
+      supaClient.from("family_tree_people").delete().eq("id", id).then(function(res){
+        if(res && res.error) retryDelete(id);
+      }, function(){ retryDelete(id); });
     });
     changedIds.forEach(function(id){
       supaClient.from("family_tree_people").upsert({ id: id, data: people[id] }).then(function(res){
@@ -503,6 +525,12 @@ function syncToDb(){
   }
 }
 function applyIncomingPeopleChange(id, data, removed){
+  if(!removed && pendingDbDeletes.indexOf(id) !== -1){
+    // We've already deleted this person locally and are still waiting for that delete to
+    // reach (or retry against) the server -- an incoming fetch/snapshot for this id just
+    // means the server hasn't caught up yet, so ignore it rather than resurrecting them.
+    return;
+  }
   if(removed){
     delete people[id];
     delete lastSyncedJson[id];
@@ -1928,6 +1956,7 @@ function deletePerson(id){
   });
   delete people[id];
   pendingDbDeletes.push(id);
+  persistPendingDeletes();
   isExample = false;
   saveState();
   renderAll();
@@ -2000,6 +2029,7 @@ function showImportExportFallback(prefill){
         var newPeople = parsed.people || parsed;
         if(!newPeople || typeof newPeople !== "object") throw new Error("bad shape");
         pendingDbDeletes = pendingDbDeletes.concat(Object.keys(people));
+        persistPendingDeletes();
         people = newPeople;
         isExample = false;
         saveState();
@@ -2020,6 +2050,7 @@ function importJSON(){
         var newPeople = parsed.people || parsed;
         if(!newPeople || typeof newPeople !== "object") throw new Error("bad");
         pendingDbDeletes = pendingDbDeletes.concat(Object.keys(people));
+        persistPendingDeletes();
         people = newPeople;
         isExample = false;
         saveState();
@@ -2141,6 +2172,7 @@ document.getElementById("addPersonBtn").addEventListener("click", function(){ pe
 document.getElementById("emptyAddBtn").addEventListener("click", function(){ document.getElementById("addPersonBtn").click(); });
 document.getElementById("startOwnBtn").addEventListener("click", function(){
   pendingDbDeletes = pendingDbDeletes.concat(Object.keys(people));
+  persistPendingDeletes();
   people = {};
   isExample = false;
   saveState();
