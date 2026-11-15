@@ -340,7 +340,7 @@
 
 <div id="listView">
   <table class="ppl" id="pplTable">
-    <thead><tr><th></th><th>Name</th><th>Born</th><th>Died</th><th>Age</th><th>Parents</th><th>Partner</th><th>Children</th></tr></thead>
+    <thead><tr><th></th><th>Name</th><th>Born</th><th>Died</th><th>Age</th><th>Parents</th><th>Partner</th><th>Children</th><th>Phone</th><th>Email</th><th>Location</th></tr></thead>
     <tbody id="pplTbody"></tbody>
   </table>
 </div>
@@ -712,6 +712,9 @@ function exportExcel(){
       "Death Year": p.deathYear || "",
       "Age": ageInfo(p) || "",
       "Details": p.details || "",
+      "Phone": p.phone || "",
+      "Email": p.email || "",
+      "Location": p.location || "",
       "Notes": p.notes || "",
       "Partner": (p.partnerId && people[p.partnerId]) ? fullName(people[p.partnerId]) : "",
       "Parents": (p.parentIds||[]).filter(function(pid){ return people[pid]; }).map(function(pid){ return fullName(people[pid]); }).join(" & "),
@@ -1507,7 +1510,10 @@ function renderList(){
     rows = rows.filter(function(p){
       return fullName(p).toLowerCase().indexOf(q) !== -1 ||
              (p.maidenName||"").toLowerCase().indexOf(q) !== -1 ||
-             (p.details||"").toLowerCase().indexOf(q) !== -1;
+             (p.details||"").toLowerCase().indexOf(q) !== -1 ||
+             (p.phone||"").toLowerCase().indexOf(q) !== -1 ||
+             (p.email||"").toLowerCase().indexOf(q) !== -1 ||
+             (p.location||"").toLowerCase().indexOf(q) !== -1;
     });
   }
   var childrenMap = buildChildrenMap();
@@ -1527,8 +1533,11 @@ function renderList(){
       '<td>' + parentsStr + '</td>' +
       '<td>' + partnerStr + '</td>' +
       '<td>' + (childCount || '<span class="muted">0</span>') + '</td>' +
+      '<td>' + (p.phone ? escapeHtml(p.phone) : '<span class="muted">—</span>') + '</td>' +
+      '<td>' + (p.email ? escapeHtml(p.email) : '<span class="muted">—</span>') + '</td>' +
+      '<td>' + (p.location ? escapeHtml(p.location) : '<span class="muted">—</span>') + '</td>' +
     '</tr>';
-  }).join("") || '<tr><td colspan="8" style="padding:24px 10px;color:var(--ink-muted);text-align:center;">No one matches that search.</td></tr>';
+  }).join("") || '<tr><td colspan="11" style="padding:24px 10px;color:var(--ink-muted);text-align:center;">No one matches that search.</td></tr>';
 
   Array.prototype.slice.call(tbody.querySelectorAll("tr[data-id]")).forEach(function(tr){
     tr.addEventListener("click", function(){ openEdit(tr.dataset.id); });
@@ -1540,7 +1549,7 @@ function startRelationship(kind, anchorId){
   pendingRelAction = { kind: kind, anchorId: anchorId };
   var fresh = {
     id: uid(), firstName:"", lastName:"", maidenName:"", birthYear:"", deathYear:"",
-    details:"", notes:"", photo:"", partnerId:"", parentIds:[]
+    details:"", phone:"", email:"", location:"", notes:"", photo:"", partnerId:"", parentIds:[]
   };
   var anchor = people[anchorId];
   if(kind === "child" && anchor){
@@ -1610,6 +1619,12 @@ function openEdit(id, draft){
         '<div class="field"><label>Death year (if applicable)</label><input id="fDeath" value="'+escapeHtml(person.deathYear)+'" inputmode="numeric" placeholder="leave blank if living"></div>' +
       '</div>' +
       '<div class="field"><label>Occupation / location</label><input id="fDetails" value="'+escapeHtml(person.details)+'" placeholder="e.g. Teacher · Austin, TX"></div>' +
+      '<div class="field-row">' +
+        '<div class="field"><label>Phone number</label><input id="fPhone" value="'+escapeHtml(person.phone)+'" placeholder="e.g. (555) 123-4567"></div>' +
+        '<div class="field"><label>Email address</label><input id="fEmail" type="email" value="'+escapeHtml(person.email)+'" placeholder="name@example.com"></div>' +
+      '</div>' +
+      '<div class="field"><label>Current state / location</label><input id="fLocation" value="'+escapeHtml(person.location)+'" placeholder="e.g. California, USA"></div>' +
+      '<div class="muted" style="font-size:11px;margin:-6px 0 10px;">Phone, email and current location only show in the List view, never on the tree cards.</div>' +
       '<div class="field"><label>Notes</label><textarea id="fNotes" placeholder="Stories, memories, anything worth keeping…">'+escapeHtml(person.notes)+'</textarea></div>' +
       relButtons +
     '</div>' +
@@ -1760,6 +1775,9 @@ function openEdit(id, draft){
     person.birthYear = overlay.querySelector("#fBirth").value.trim();
     person.deathYear = overlay.querySelector("#fDeath").value.trim();
     person.details = overlay.querySelector("#fDetails").value.trim();
+    person.phone = overlay.querySelector("#fPhone").value.trim();
+    person.email = overlay.querySelector("#fEmail").value.trim();
+    person.location = overlay.querySelector("#fLocation").value.trim();
     person.notes = overlay.querySelector("#fNotes").value.trim();
     var oldPhoto = person.photo;
     person.photo = pendingPhoto;
@@ -2205,7 +2223,7 @@ function renderAll(){
 
 document.getElementById("tabTree").addEventListener("click", function(){ setView("tree"); });
 document.getElementById("tabList").addEventListener("click", function(){ setView("list"); });
-document.getElementById("addPersonBtn").addEventListener("click", function(){ pendingRelAction=null; openEdit(null, {id:uid(),firstName:"",lastName:"",maidenName:"",birthYear:"",deathYear:"",details:"",notes:"",photo:"",partnerId:"",parentIds:[]}); });
+document.getElementById("addPersonBtn").addEventListener("click", function(){ pendingRelAction=null; openEdit(null, {id:uid(),firstName:"",lastName:"",maidenName:"",birthYear:"",deathYear:"",details:"",phone:"",email:"",location:"",notes:"",photo:"",partnerId:"",parentIds:[]}); });
 document.getElementById("emptyAddBtn").addEventListener("click", function(){ document.getElementById("addPersonBtn").click(); });
 document.getElementById("startOwnBtn").addEventListener("click", function(){
   pendingDbDeletes = pendingDbDeletes.concat(Object.keys(people));
