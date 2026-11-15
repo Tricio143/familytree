@@ -175,6 +175,14 @@
   }
   .unit-plus:hover{border-color:var(--accent); color:var(--accent); border-style:solid;}
 
+  .unit-collapse{
+    position:absolute; height:22px; min-width:22px; padding:0 7px; border-radius:11px; background:var(--surface);
+    border:1px solid var(--line-strong); color:var(--ink-faint); display:flex; align-items:center;
+    justify-content:center; font-size:11.5px; font-weight:600; line-height:1; pointer-events:auto; white-space:nowrap;
+  }
+  .unit-collapse:hover{border-color:var(--accent); color:var(--accent);}
+  .unit-collapse.is-collapsed{background:var(--accent-soft); border-color:var(--accent); color:var(--accent-ink);}
+
   .empty-state{
     position:absolute; inset:0; display:flex; align-items:center; justify-content:center; flex-direction:column; gap:14px; text-align:center; padding:20px;
   }
@@ -971,6 +979,19 @@ function computeGenerations(){
 function buildUnits(childrenMap, gen){
   var visited = {};
   var crossLinks = []; // {parentUnit, childId} -- a child already drawn elsewhere (married in) gets a connector instead of a duplicate card
+  // Counts every descendant below a set of starting children, regardless of nested collapse
+  // state -- used only for the "N hidden" badge on a collapsed unit, never for layout.
+  function countDescendants(startIds){
+    var seen = {}, queue = startIds.slice(), count = 0;
+    while(queue.length){
+      var id = queue.shift();
+      if(seen[id]) continue;
+      seen[id] = true;
+      count++;
+      (childrenMap[id]||[]).forEach(function(cid){ queue.push(cid); });
+    }
+    return count;
+  }
   function buildUnit(personId){
     if(visited[personId]) return null;
     visited[personId] = true;
@@ -981,19 +1002,38 @@ function buildUnits(childrenMap, gen){
     var childIds = {};
     (childrenMap[personId]||[]).forEach(function(cid){ childIds[cid]=1; });
     if(partner) (childrenMap[partner.id]||[]).forEach(function(cid){ childIds[cid]=1; });
-    var unit = { key: personId, members: members, childUnits: [], gen: gen[personId] };
-    Object.keys(childIds).sort(function(a,b){
-      return (parseInt(people[a].birthYear)||9999) - (parseInt(people[b].birthYear)||9999);
-    }).forEach(function(cid){
-      var u = buildUnit(cid);
-      if(u){
-        unit.childUnits.push(u);
-      } else {
-        // cid was already visited elsewhere -- they married into another branch.
-        // Keep a reference so we can draw a connector to wherever they actually ended up.
-        crossLinks.push({ parentUnit: unit, childId: cid });
+    var childIdList = Object.keys(childIds);
+    var collapsed = !!person.collapsedChildren;
+    var unit = { key: personId, members: members, childUnits: [], gen: gen[personId], hasChildren: childIdList.length > 0, collapsed: false, hiddenCount: 0 };
+    if(collapsed && childIdList.length){
+      unit.collapsed = true;
+      unit.hiddenCount = countDescendants(childIdList);
+      // Mark every descendant (and their partners) visited, without building units for them,
+      // so a collapsed branch truly disappears from the canvas instead of surfacing elsewhere
+      // as a stray root or a duplicate card.
+      var stack = childIdList.slice();
+      while(stack.length){
+        var id = stack.pop();
+        if(visited[id]) continue;
+        visited[id] = true;
+        var pp = people[id];
+        if(pp && pp.partnerId && people[pp.partnerId]) visited[pp.partnerId] = true;
+        (childrenMap[id]||[]).forEach(function(cid){ stack.push(cid); });
       }
-    });
+    } else {
+      childIdList.sort(function(a,b){
+        return (parseInt(people[a].birthYear)||9999) - (parseInt(people[b].birthYear)||9999);
+      }).forEach(function(cid){
+        var u = buildUnit(cid);
+        if(u){
+          unit.childUnits.push(u);
+        } else {
+          // cid was already visited elsewhere -- they married into another branch.
+          // Keep a reference so we can draw a connector to wherever they actually ended up.
+          crossLinks.push({ parentUnit: unit, childId: cid });
+        }
+      });
+    }
     return unit;
   }
   var roots = Object.keys(people).filter(function(id){
@@ -1069,7 +1109,7 @@ function renderTree(liveOnly){
   // frame so they track the card smoothly, without touching the card elements themselves
   // (rebuilding them mid-drag would drop the pointer capture and cancel the drag).
   if(!liveOnly){
-    Array.prototype.slice.call(canvas.querySelectorAll(".person-card, .unit-plus")).forEach(function(el){ el.remove(); });
+    Array.prototype.slice.call(canvas.querySelectorAll(".person-card, .unit-plus, .unit-collapse")).forEach(function(el){ el.remove(); });
   }
   svg.innerHTML = "";
 
@@ -1405,6 +1445,30 @@ function placeUnitControls(canvas, unit, ep){
     startRelationship("child", unit.members[0].id);
   });
   canvas.appendChild(addChild);
+
+  // collapse / expand toggle, for units that have descendants worth hiding -- sits at the
+  // top-right corner of the unit's rightmost card, above the add-parent row so it never overlaps.
+  if(unit.hasChildren){
+    var rightEdge = unit.members.length === 2 ? ep.x1 + CARD_W : ep.x0 + CARD_W;
+    var toggle = document.createElement("button");
+    toggle.className = "unit-collapse" + (unit.collapsed ? " is-collapsed" : "");
+    toggle.style.left = (rightEdge - (unit.collapsed ? 30 : 20)) + "px";
+    toggle.style.top = (topY - 10) + "px";
+    if(unit.collapsed){
+      toggle.title = "Show " + unit.hiddenCount + " hidden descendant" + (unit.hiddenCount===1 ? "" : "s");
+      toggle.textContent = "▸ " + unit.hiddenCount;
+    } else {
+      toggle.title = "Collapse this branch";
+      toggle.textContent = "−";
+    }
+    toggle.addEventListener("click", function(ev){
+      ev.stopPropagation();
+      people[unit.key].collapsedChildren = !unit.collapsed;
+      saveState();
+      renderTree();
+    });
+    canvas.appendChild(toggle);
+  }
 }
 
 /* ================= Rendering: List ================= */
@@ -1456,6 +1520,7 @@ function startRelationship(kind, anchorId){
   if(kind === "child" && anchor){
     fresh.lastName = anchor.lastName || "";
     fresh.parentIds = anchor.partnerId ? [anchor.id, anchor.partnerId] : [anchor.id];
+    if(anchor.collapsedChildren) delete anchor.collapsedChildren; // a new child should be visible right away
   }
   if(kind === "sibling" && anchor){
     fresh.lastName = anchor.lastName || "";
@@ -1958,6 +2023,15 @@ function toggleMoreMenu(){
     renderAll();
     toast("Cards snapped back to the automatic layout.");
   });
+  var expandItem = item("Expand all collapsed branches");
+  expandItem.addEventListener("click", function(){
+    menu.remove();
+    var any = false;
+    Object.keys(people).forEach(function(id){ if(people[id].collapsedChildren){ delete people[id].collapsedChildren; any = true; } });
+    saveState();
+    renderAll();
+    toast(any ? "All branches expanded." : "Nothing was collapsed.");
+  });
   var copyItem = item("Copy tree data (backup)");
   copyItem.addEventListener("click", function(){ menu.remove(); exportJSON(); });
   var importItem = item("Import tree data…");
@@ -1965,6 +2039,7 @@ function toggleMoreMenu(){
   var excelItem = item("Export to Excel (.xlsx)");
   excelItem.addEventListener("click", function(){ menu.remove(); exportExcel(); });
   menu.appendChild(resetItem);
+  menu.appendChild(expandItem);
   menu.appendChild(copyItem);
   menu.appendChild(importItem);
   menu.appendChild(excelItem);
